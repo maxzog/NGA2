@@ -267,9 +267,7 @@ contains
       
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-         integer :: np
-         call param_read('Number of particles',np)
-         pmesh=partmesh(n=np,nvar=0,nvec=0,name='lpt')
+         pmesh=partmesh(nvar=0,name='lpt')
          call lp%update_partmesh(pmesh)
       end block create_pmesh
       
