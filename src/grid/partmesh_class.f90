@@ -15,6 +15,9 @@ module partmesh_class
       integer :: nvar                                                   !< Number of particle variables stored
       real(WP), dimension(:,:), allocatable :: var                      !< Particle variable storage
       character(len=str_medium), dimension(:), allocatable :: varname   !< Name of particle variable fields
+      integer :: nvec                                                   !< Number of particle vectors stored
+      real(WP), dimension(:,:,:), allocatable :: vec                    !< Particle vector data storage
+      character(len=str_medium), dimension(:), allocatable :: vecname   !< Name of particle vector fields
    contains
       procedure :: reset                                   !< Reset particle mesh to zero size
       procedure :: set_size                                !< Set particle mesh to provided size
@@ -31,10 +34,11 @@ contains
    
    
    !> Constructor for particle mesh object
-   function constructor(nvar,name) result(self)
+   function constructor(nvar,nvec,name) result(self)
       implicit none
       type(partmesh) :: self
       integer, intent(in) :: nvar
+      integer, intent(in) :: nvec
       character(len=*), optional :: name
       ! Set the name of the particle mesh
       if (present(name)) self%name=trim(adjustl(name))
@@ -44,6 +48,10 @@ contains
       self%nvar=nvar
       allocate(self%varname(self%nvar))
       self%varname='' !< Users will set the name themselves
+      ! Initialize additional vector data
+      self%nvec=nvec
+      allocate(self%vecname(self%nvec))
+      self%vecname='' !< Users will set the name themselves
    end function constructor
    
    
@@ -53,6 +61,7 @@ contains
       class(partmesh), intent(inout) :: this
       this%n=0
       if (allocated(this%pos)) deallocate(this%pos)
+      if (allocated(this%vec)) deallocate(this%vec)
       if (allocated(this%var)) deallocate(this%var)
    end subroutine reset
    
@@ -63,8 +72,9 @@ contains
       class(partmesh), intent(inout) :: this
       integer, intent(in) :: size
       this%n=size
-      allocate(this%pos(        3,this%n))
-      allocate(this%var(this%nvar,this%n))
+      allocate(this%pos(        3          ,this%n))
+      allocate(this%vec(        3,this%n,this%nvec))
+      allocate(this%var(this%nvar          ,this%n))
    end subroutine set_size
    
    
