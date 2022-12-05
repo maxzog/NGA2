@@ -794,12 +794,16 @@ contains
    
    
    !> Update particle mesh using our current particles
-   subroutine update_partmesh(this,pmesh)
+   subroutine update_partmesh(this,pmesh,U,V,W)
       use partmesh_class, only: partmesh
+      use messager,       only: die 
       implicit none
       class(lpt), intent(inout) :: this
       class(partmesh), intent(inout) :: pmesh
-      integer :: i
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
       ! Reset particle mesh storage
       call pmesh%reset()
       ! Nothing else to do if no particle is present
@@ -808,6 +812,24 @@ contains
       call pmesh%set_size(this%np_)
       do i=1,this%np_
          pmesh%pos(:,i)=this%p(i)%pos
+         do j=1,pmesh%nvar
+            select case(pmesh%varname(j))
+               case ('T')
+                  pmesh%var(:,j)=this%p(i)%T
+               case default
+                  call die('[update_partmesh] Scalar not specified: '//trim(pmesh%varname(j)))
+            end select
+         end do
+         do k=1,pmesh%nvec
+            select case(pmesh%vecname(k))
+               case ('vel')
+                  pmesh%vec(:,i,k)=this%p(i)%vel
+               case ('fld')
+                  pmesh%vec(:,i,k)=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
+               case default
+                  call die('[update_partmesh] Vector not specified: '//trim(pmesh%vecname(k)))
+            end select
+         end do 
       end do
    end subroutine update_partmesh
    
