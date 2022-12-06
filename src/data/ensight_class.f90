@@ -689,7 +689,7 @@ contains
       class(ensight), intent(in) :: this
       type(prt), pointer, intent(in) :: part
       character(len=str_medium) :: filename
-      integer :: iunit,ierr,rank,n
+      integer :: iunit,ierr,rank,n,i
       character(len=80) :: cbuff
       integer :: ibuff,npart
       
@@ -761,7 +761,6 @@ contains
             if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
             ! General header
             cbuff='particle '//trim(part%ptr%varname(n)); write(iunit) cbuff
-            write(iunit) (ibuff,ibuff=1,npart)
             ! Close the file
             close(iunit)
          end if
@@ -780,7 +779,7 @@ contains
             call MPI_BARRIER(this%cfg%comm,ierr)
          end do
       end do
-      
+     
       ! Generate the additional vector files
       do n=1,part%ptr%nvec
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.'
@@ -791,22 +790,18 @@ contains
             open(newunit=iunit,file=trim(filename),form='unformatted',status='replace',access='stream',iostat=ierr)
             if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
             ! General header
-            cbuff='C Binary'                                         ; write(iunit) cbuff
-            cbuff=trim(adjustl(part%ptr%name))                       ; write(iunit) cbuff
             cbuff='particle'//trim(adjustl(part%ptr%vecname(n)))     ; write(iunit) cbuff
-            ibuff=npart                                              ; write(iunit) ibuff
-            write(iunit) (ibuff,ibuff=1,npart)
             ! Close the file
             close(iunit)
          end if
-         ! Write the particle variable
+         ! Write the vector at the particle location
          do rank=0,this%cfg%nproc-1
             if (rank.eq.this%cfg%rank) then
                ! Open the file
                open(newunit=iunit,file=trim(filename),form='unformatted',status='old',access='stream',position='append',iostat=ierr)
                if (ierr.ne.0) call die('[ensight write part] Could not open file: '//trim(filename))
                ! Write part info if it exists on the processor
-               if (part%ptr%n.gt.0) write(iunit) real(part%ptr%vec(:,:,n),SP)
+               if (part%ptr%n.gt.0) write(iunit) real(part%ptr%vec(:,n,:),SP)
                ! Close the file
                close(iunit)
             end if

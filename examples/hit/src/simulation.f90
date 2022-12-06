@@ -39,7 +39,7 @@ module simulation
    !> Fluid and forcing parameters
    real(WP) :: visc
    real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta
-   real(WP) :: Uvar,Vvar,Wvar,TKE
+   real(WP) :: Uvar,Vvar,Wvar,TKE,URMS
    real(WP) :: tau_eddy
    logical  :: linforce
 
@@ -194,9 +194,9 @@ contains
 
       ! Create partmesh object for Lagrangian particle output
       create_pmesh: block
-         integer :: np
+         integer :: np,i
          call param_read('Number of particles',np)
-         pmesh=partmesh(n=np,nvar=0,nvec=2,name='lpt',vecname=['vel','fld'])
+         pmesh=partmesh(n=np,nvar=1,nvec=2,name='lpt',varname=['T'],vecname=['vel','fld'])
          call lp%update_partmesh(pmesh,U=fs%U,V=fs%V,W=fs%W)
       end block create_pmesh
 
@@ -253,6 +253,7 @@ contains
          call hitfile%add_column(time%n,'Timestep number')
          call hitfile%add_column(time%t,'Time')
          call hitfile%add_column(TKE,'TKE')
+         call hitfile%add_column(URMS,'URMS')
          call hitfile%add_column(EPS,'Epsilon')
          call hitfile%add_column(Re_L,'Re_L')
          call hitfile%add_column(Re_lambda,'Re_lambda')
@@ -282,7 +283,6 @@ contains
    !> Time integrate our problem
    subroutine simulation_run
       implicit none
-      
       ! Perform time integration
       do while (.not.time%done())
          
@@ -421,6 +421,7 @@ contains
                call MPI_ALLREDUCE(mySR2,meanSR2,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanSR2=meanSR2/fs%cfg%vol_total
               
                TKE = 0.5_Wp*(Uvar+Vvar+Wvar)
+               URMS = 2.0_WP/3.0_WP*sqrt(TKE)
                EPS = 2.0_WP*visc*meanSR2/fs%rho
                Re_L = TKE**2.0_WP/EPS/visc 
                Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)

@@ -73,7 +73,7 @@ contains
       integer, intent(in) :: size
       this%n=size
       allocate(this%pos(        3          ,this%n))
-      allocate(this%vec(        3,this%n,this%nvec))
+      allocate(this%vec(        3,this%nvec,this%n))
       allocate(this%var(this%nvar          ,this%n))
    end subroutine set_size
    
