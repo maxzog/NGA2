@@ -39,8 +39,8 @@ module simulation
    !> Fluid and forcing parameters
    real(WP) :: visc
    real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta
-   real(WP) :: Uvar,Vvar,Wvar,TKE,URMS
-   real(WP) :: tau_eddy
+   real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell
+   real(WP) :: tau_eddy, tau ! tau_eddy is input, tau is calculated from tke and epsilon
    logical  :: linforce
 
 contains
@@ -101,7 +101,7 @@ contains
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
          use parallel, only: MPI_REAL_WP
          integer :: i,j,k,ierr
-         real(WP) :: myKE
+         real(WP) :: myKE!, Lx
          ! Read in velocity rms and forcing time scale
          call param_read('Initial rms',Urms0)
          call param_read('Eddy turnover time',tau_eddy)
@@ -142,8 +142,11 @@ contains
             end do
          end do
          call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+         ! Read in Lx for calculation of KE0 - Assumes ell = 1/5 * Lx (Carrol & Blanquart 2013)
+         !call param_read('Lx', Lx)
          if (linforce) then
             KE0=KE
+            !KE0 = 13.5_WP*(0.2_WP * Lx)**2 / tau_eddy**2 / 4.0_WP
          else
             KE0=0.0_WP
          end if
@@ -196,7 +199,7 @@ contains
       create_pmesh: block
          integer :: np,i
          call param_read('Number of particles',np)
-         pmesh=partmesh(n=np,nvar=1,nvec=2,name='lpt',varname=['T'],vecname=['vel','fld'])
+         pmesh=partmesh(n=np,nvar=0,nvec=2,name='lpt',vecname=['vel','fld'])
          call lp%update_partmesh(pmesh,U=fs%U,V=fs%V,W=fs%W)
       end block create_pmesh
 
@@ -252,12 +255,14 @@ contains
          hitfile=monitor(fs%cfg%amRoot,'hit')
          call hitfile%add_column(time%n,'Timestep number')
          call hitfile%add_column(time%t,'Time')
-         call hitfile%add_column(TKE,'TKE')
-         call hitfile%add_column(URMS,'URMS')
-         call hitfile%add_column(EPS,'Epsilon')
          call hitfile%add_column(Re_L,'Re_L')
          call hitfile%add_column(Re_lambda,'Re_lambda')
          call hitfile%add_column(eta,'eta')
+         call hitfile%add_column(TKE,'TKE')
+         call hitfile%add_column(tau,'tau_eddy')
+         call hitfile%add_column(URMS,'URMS')
+         call hitfile%add_column(EPS,'Epsilon')
+         call hitfile%add_column(ell,'Integral lengthscale')
          call hitfile%write()
          ! Create LPT monitor
          call lp%get_max()
@@ -426,6 +431,8 @@ contains
                Re_L = TKE**2.0_WP/EPS/visc 
                Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
                eta = (visc**3.0_WP/EPS)**0.25_WP
+               ell = URMS**3.0_WP / EPS
+               tau  = TKE / EPS 
          end block compute_stats
             
          ! Output to ensight

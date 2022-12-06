@@ -9,13 +9,13 @@ nx :	64
 Dynamic viscosity :    0.01
 Density :              1
 Initial rms :          5
-Eddy turnover time :   0.01
+Eddy turnover time :   0.1
 Linear forcing :       .true.
 
 # Particle properties
 Particle density :     1000
 Particle diameter :    0.0012
-Number of particles :  10000
+Number of particles :  500000
 
 # Time integration
 Max timestep size : 1e-3
@@ -30,4 +30,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 0.01
+Ensight output period : 0.005
