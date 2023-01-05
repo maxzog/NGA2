@@ -10,6 +10,11 @@ module sgsmodel_class
    ! Expose type/constructor/methods
    public :: sgsmodel
    
+   ! List of SGS LES models available
+   integer, parameter, public :: dynamic_smag=1     !< Dynamic Smagorinsky -- BROKEN
+   integer, parameter, public :: constant_smag=2    !< Constant Smagorinsky 
+   integer, parameter, public :: vreman=3           !< Vreman 2004 
+
    ! Some clipping parameters
    real(WP), parameter :: Cs_ref=0.1_WP
    
@@ -36,13 +41,19 @@ module sgsmodel_class
       real(WP), dimension(:,:,:,:,:,:), allocatable :: filtern  !< Filtering operator with Neumann at walls
       real(WP), dimension(:,:,:), allocatable :: ratio          !< Filter ratio
       real(WP), dimension(:,:,:), allocatable :: delta          !< Filter size
+
+      ! SGS model type
+      integer :: type
       
    contains
       
       procedure :: log=>sgs_log                                 !< Log SGS info
       procedure :: print=>sgs_print                             !< Output SGS info to the screen
-      procedure :: get_visc                                     !< Calculate the SGS viscosity
-      
+      procedure :: get_visc                                     !< Calls appropriate eddy viscosity subroutine
+      procedure :: visc_dynamic                                 !< Calculate the SGS viscosity (Dynamic Smag)
+      procedure :: visc_cons                                    !< Calculate the SGS viscosity (Constant Smag)
+      procedure :: visc_vreman                                  !< Calculate the SGS viscosity (Vreman 2004)
+
       procedure, private :: interpolate                         !< Helper function that interpolates a field to a point
       
    end type sgsmodel
@@ -249,9 +260,28 @@ contains
       
    end function constructor
    
+   !> Calls appropriate eddy viscosity subroutine according to SGSmodel%type
+   subroutine get_visc(this,dt,rho,Ui,Vi,Wi,SR,gradu)
+      implicit none
+      class(sgsmodel), intent(inout) :: this 
+      real(WP), intent(in) :: dt !< dt since the last call to the model
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho !< Density including all ghosts
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Ui  !< Interpolated velocities including all ghosts
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Vi  !< Interpolated velocities including all ghosts
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Wi  !< Interpolated velocities including all ghosts
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR  !< Strain rate tensor
+      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradu !< Velocity gradient tensor
+      
+      select case(this%type)
+      case(dynamic_smag); call this%visc_dynamic(dt,rho,Ui,Vi,Wi,SR,gradu)
+      case(constant_smag); call this%visc_cons(rho,SR)
+      case(vreman); call this%visc_vreman(rho,gradu)
+      end select
    
-   !> Get subgrid scale dynamic viscosity
-   subroutine get_visc(this,dt,rho,Ui,Vi,Wi,SR)
+   end subroutine get_visc
+
+   !> Get subgrid scale dynamic viscosity - Dynamic
+   subroutine visc_dynamic(this,dt,rho,Ui,Vi,Wi,SR,gradu)
       use param, only: verbose
       implicit none
       class(sgsmodel), intent(inout) :: this
@@ -261,6 +291,7 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Vi  !< Interpolated velocities including all ghosts
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Wi  !< Interpolated velocities including all ghosts
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR  !< Strain rate tensor
+      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradu !< Velocity gradient tensor
       integer :: i,j,k
       real(WP) :: Frho,FU,FV,FW,FS_
       real(WP) :: Cs,tau,alpha
@@ -329,7 +360,6 @@ contains
             end do
          end do
       end do
-      
       ! Synchronize LM and MM
       call this%cfg%sync(this%LM)
       call this%cfg%sync(this%MM)
@@ -363,12 +393,11 @@ contains
                else
                   Cs=0.0_WP
                end if
-               Cs=Cs_ref
+               Cs = Cs_ref
                this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*Cs*this%delta(i,j,k)**2
             end do
          end do
       end do
-      
       ! Synchronize visc
       call this%cfg%sync(this%visc)
       
@@ -387,9 +416,103 @@ contains
       ! Output info about model
       if (verbose.gt.0) call this%log()
       if (verbose.gt.1) call this%print()
-      
-   end subroutine get_visc
+   end subroutine visc_dynamic
    
+   !> Get subgrid scale dynamic viscosity - Constant
+   subroutine visc_cons(this,rho,SR)
+      use param, only: verbose
+      implicit none
+      class(sgsmodel), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho !< Density including all ghosts
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR  !< Strain rate tensor
+      integer :: i,j,k
+      real(WP), dimension(:,:,:), allocatable :: S_
+      
+      ! Prepare magnitude of SR tensor
+      allocate(S_(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      S_=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
+      
+      ! Compute the eddy viscosity
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*Cs_ref*this%delta(i,j,k)**2
+            end do
+         end do
+      end do
+      ! Synchronize visc
+      call this%cfg%sync(this%visc)
+      
+      ! Calculate some info on the model
+      calc_info: block
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
+         use parallel, only: MPI_REAL_WP
+         integer :: ierr
+         call MPI_ALLREDUCE(maxval(this%visc),this%max_visc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(minval(this%visc),this%min_visc,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      end block calc_info
+      
+      ! Output info about model
+      if (verbose.gt.0) call this%log()
+      if (verbose.gt.1) call this%print()
+   end subroutine visc_cons
+   
+   !> Get subgrid scale dynamic viscosity - Vreman
+   subroutine visc_vreman(this,rho,gradu)
+      use param, only: verbose
+      implicit none
+      class(sgsmodel), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho         !< Density including all ghosts
+      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradu !< Velocity gradient 
+
+      real(WP), dimension(:,:,:), allocatable :: alph2                                                   !< velocity gradient tensor squared
+      real(WP) :: c,B,beta11,beta22,beta33,beta12,beta13,beta23
+      integer :: i,j,k
+      
+      allocate(alph2(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      alph2 = gradu(1,1,:,:,:)**2.0_WP + gradu(1,2,:,:,:)**2.0_WP + gradu(1,3,:,:,:)**2.0_WP + &
+              gradu(2,1,:,:,:)**2.0_WP + gradu(2,2,:,:,:)**2.0_WP + gradu(2,3,:,:,:)**2.0_WP + &
+              gradu(3,1,:,:,:)**2.0_WP + gradu(3,2,:,:,:)**2.0_WP + gradu(3,3,:,:,:)**2.0_WP 
+      
+      ! Model constant - FOR HIT c \approx 0.07
+      ! - For complex flows c = 2.5*Cs**2
+      c = 0.07_WP
+
+      ! Compute the eddy viscosity
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+                beta11 = this%delta(i,j,k)**2.0_WP*(gradu(1,1,i,j,k)**2.0_WP + gradu(2,1,i,j,k)**2.0_WP + gradu(3,1,i,j,k)**2.0_WP)
+                beta22 = this%delta(i,j,k)**2.0_WP*(gradu(1,2,i,j,k)**2.0_WP + gradu(2,2,i,j,k)**2.0_WP + gradu(3,2,i,j,k)**2.0_WP)
+                beta33 = this%delta(i,j,k)**2.0_WP*(gradu(1,3,i,j,k)**2.0_WP + gradu(2,3,i,j,k)**2.0_WP + gradu(3,3,i,j,k)**2.0_WP)
+                beta12 = this%delta(i,j,k)**2.0_WP*(gradu(1,1,i,j,k)*gradu(1,2,i,j,k) + gradu(2,1,i,j,k)*gradu(2,2,i,j,k) + &
+                           gradu(3,1,i,j,k)*gradu(3,2,i,j,k))
+                beta13 = this%delta(i,j,k)**2.0_WP*(gradu(1,1,i,j,k)*gradu(1,3,i,j,k) + gradu(2,1,i,j,k)*gradu(2,3,i,j,k) + &
+                           gradu(3,1,i,j,k)*gradu(3,3,i,j,k))
+                beta23 = this%delta(i,j,k)**2.0_WP*(gradu(1,2,i,j,k)*gradu(1,3,i,j,k) + gradu(2,2,i,j,k)*gradu(2,3,i,j,k) + &
+                                      gradu(3,2,i,j,k)*gradu(3,3,i,j,k))
+                
+                B = beta11*beta22 - beta12**2.0_WP + beta11*beta33 - beta13**2.0_WP + beta22*beta33 - beta23**2.0_WP
+                this%visc(i,j,k) = c*sqrt(B/alph2(i,j,k))
+            end do
+         end do
+      end do
+      ! Synchronize visc
+      call this%cfg%sync(this%visc)
+      
+      ! Calculate some info on the model
+      calc_info: block
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_MIN
+         use parallel, only: MPI_REAL_WP
+         integer :: ierr
+         call MPI_ALLREDUCE(maxval(this%visc),this%max_visc,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
+         call MPI_ALLREDUCE(minval(this%visc),this%min_visc,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr)
+      end block calc_info
+      
+      ! Output info about model
+      if (verbose.gt.0) call this%log()
+      if (verbose.gt.1) call this%print()
+   end subroutine visc_vreman
    
    !> Private function that performs an trilinear interpolation of a cell-centered
    !> field A to the provided position pos in the vicinity of cell i0,j0,k0
