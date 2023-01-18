@@ -15,11 +15,13 @@ Linear forcing :       .true.
 # Particle properties
 Particle density :     1000
 Particle diameter :    0.0012
-Number of particles :  500000
+Number of particles :  250000
+Use CRW :              .false.
 
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
+Max iter :          1500
 
 # Pressure solver
 Pressure tolerance : 1e-6
@@ -30,4 +32,4 @@ Implicit tolerance : 1e-6
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 0.005
+Ensight output period : 0.01
