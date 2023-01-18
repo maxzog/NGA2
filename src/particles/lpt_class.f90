@@ -90,12 +90,6 @@ module lpt_class
       ! Particle volume fraction
       real(WP), dimension(:,:,:), allocatable :: VF       !< Particle volume fraction, cell-centered
       
-      ! Momentum source
-      real(WP), dimension(:,:,:), allocatable :: srcU     !< U momentum source on mesh, cell-centered
-      real(WP), dimension(:,:,:), allocatable :: srcV     !< V momentum source on mesh, cell-centered
-      real(WP), dimension(:,:,:), allocatable :: srcW     !< W momentum source on mesh, cell-centered
-      real(WP), dimension(:,:,:), allocatable :: srcE     !< E momentum source on mesh, cell-centered
-      
       ! Filtering operation
       real(WP) :: filter_width                            !< Characteristic filter width
       real(WP), dimension(:,:,:,:), allocatable :: div_x,div_y,div_z    !< Divergence operator
@@ -151,10 +145,6 @@ contains
       
       ! Allocate VF and src arrays on cfg mesh
       allocate(self%VF  (self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%VF  =0.0_WP
-      allocate(self%srcU(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcU=0.0_WP
-      allocate(self%srcV(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcV=0.0_WP
-      allocate(self%srcW(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcW=0.0_WP
-      allocate(self%srcE(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%srcE=0.0_WP
       
       ! Set default filter width to zero by default
       self%filter_width=0.0_WP
@@ -496,11 +486,6 @@ contains
       real(WP), dimension(3) :: acc,dmom
       type(part) :: pold
       
-      ! Zero out source term arrays
-      this%srcU=0.0_WP
-      this%srcV=0.0_WP
-      this%srcW=0.0_WP
-      this%srcE=0.0_WP
       
       ! Advance the equations
       do i=1,this%np_
@@ -521,13 +506,6 @@ contains
             this%p(i)%vel=pold%vel+mydt*(acc+this%gravity+this%p(i)%col)
             ! Relocalize
             this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
-            ! Send source term back to the mesh
-            dmom=mydt*acc*this%rho*Pi/6.0_WP*this%p(i)%d**3
-            deng=sum(dmom*this%p(i)%vel)
-            if (this%cfg%nx.gt.1) call this%cfg%set_scalar(Sp=-dmom(1),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcU,bc='n')
-            if (this%cfg%ny.gt.1) call this%cfg%set_scalar(Sp=-dmom(2),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcV,bc='n')
-            if (this%cfg%nz.gt.1) call this%cfg%set_scalar(Sp=-dmom(3),pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcW,bc='n')
-                                  call this%cfg%set_scalar(Sp=-deng   ,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%srcE,bc='n')
             ! Increment
             dt_done=dt_done+mydt
          end do
@@ -545,12 +523,6 @@ contains
       
       ! Communicate particles
       call this%sync()
-      
-      ! Divide source arrays by volume, sum at boundaries, and volume filter
-      this%srcU=this%srcU/this%cfg%vol; call this%cfg%syncsum(this%srcU); call this%filter(this%srcU)
-      this%srcV=this%srcV/this%cfg%vol; call this%cfg%syncsum(this%srcV); call this%filter(this%srcV)
-      this%srcW=this%srcW/this%cfg%vol; call this%cfg%syncsum(this%srcW); call this%filter(this%srcW)
-      this%srcE=this%srcE/this%cfg%vol; call this%cfg%syncsum(this%srcE); call this%filter(this%srcE)
       
       ! Recompute volume fraction
       call this%update_VF()
