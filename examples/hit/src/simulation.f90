@@ -29,7 +29,7 @@ module simulation
    type(event)    :: ens_evt
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,hitfile,lptfile,sgsfile
+   type(monitor) :: mfile,cflfile,hitfile,lptfile,sgsfile,tfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -45,6 +45,14 @@ module simulation
    real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE
    real(WP) :: meanvisc,Lx,tau_eddy, tau ! tau_eddy is input, tau is calculated from tke and epsilon
    logical  :: linforce
+
+   !> Wallclock time for monitoring
+   type :: timer
+      real(WP) :: time_in
+      real(WP) :: time
+      real(WP) :: percent
+   end type timer
+   type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest
 
    !> OU
    logical  :: use_crw
@@ -82,7 +90,15 @@ contains
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-      
+
+      ! Initialize timers
+      initialize_timers: block
+         wt_total%time=0.0_WP; wt_total%percent=0.0_WP
+         wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
+         wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
+         wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
+         wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
+      end block initialize_timers
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
@@ -343,6 +359,20 @@ contains
          call sgsfile%add_column(time%t,'Time')
          call sgsfile%add_column(sgs%min_visc,'Min eddy visc')
          call sgsfile%add_column(sgs%max_visc,'Max eddy visc')
+         ! Create timing monitor
+         tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
+         call tfile%add_column(time%n,'Timestep number')
+         call tfile%add_column(time%t,'Time')
+         call tfile%add_column(wt_total%time,'Total [s]')
+         call tfile%add_column(wt_vel%time,'Velocity [s]')
+         call tfile%add_column(wt_vel%percent,'Velocity [%]')
+         call tfile%add_column(wt_pres%time,'Pressure [s]')
+         call tfile%add_column(wt_pres%percent,'Pressure [%]')
+         call tfile%add_column(wt_lpt%time,'LPT [s]')
+         call tfile%add_column(wt_lpt%percent,'LPT [%]')
+         call tfile%add_column(wt_rest%time,'Rest [s]')
+         call tfile%add_column(wt_rest%percent,'Rest [%]')
+         call tfile%write()
       end block create_monitor
       
       
@@ -352,17 +382,30 @@ contains
    !> Time integrate our problem
    subroutine simulation_run
       use sgsmodel_class, only: vreman, constant_smag, off
+      use parallel,       only: parallel_time
       implicit none
       integer :: ii
       ! Perform time integration
       do while (.not.time%done())
+
+         ! init wallclock time
+         wt_total%time_in=parallel_time()
+         
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
+
+         ! LPT time init
+         wt_lpt%time_in=parallel_time()
+
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
          call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,use_crw=use_crw,sgs=sgs)
+
+         ! LPT time end
+         wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
+
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
@@ -385,6 +428,9 @@ contains
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
             
+            ! init vel time
+            wt_vel%time_in=parallel_time()
+
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
             fs%V=0.5_WP*(fs%V+fs%Vold)
@@ -441,8 +487,12 @@ contains
             
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
+
+            ! end vel time
+            wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
             
             ! Solve Poisson equation
+            wt_pres%time_in=parallel_time()
             call fs%correct_mfr()
             call fs%get_div()
             fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
@@ -456,15 +506,19 @@ contains
             fs%U=fs%U-time%dt*resU/fs%rho
             fs%V=fs%V-time%dt*resV/fs%rho
             fs%W=fs%W-time%dt*resW/fs%rho
+
+            wt_pres%time=wt_pres%time+parallel_time()-wt_pres%time_in
             
             ! Increment sub-iteration counter
             time%it=time%it+1
             
          end do
          sgsTKE = 0.0_WP 
+         wt_vel%time_in=parallel_time()
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+         wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
             
          
          ! Compute turbulence statistics for monitor
@@ -547,6 +601,20 @@ contains
          call lp%get_max()
          call lptfile%write()
          call sgsfile%write()
+
+         ! Monitor timing
+         wt_total%time=parallel_time()-wt_total%time_in
+         wt_vel%percent=wt_vel%time/wt_total%time*100.0_WP
+         wt_pres%percent=wt_pres%time/wt_total%time*100.0_WP
+         wt_lpt%percent=wt_lpt%time/wt_total%time*100.0_WP
+         wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_lpt%time
+         wt_rest%percent=wt_rest%time/wt_total%time*100.0_WP
+         call tfile%write()
+         wt_total%time=0.0_WP; wt_total%percent=0.0_WP
+         wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
+         wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
+         wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
+         wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
          
       end do
       
