@@ -52,7 +52,7 @@ module simulation
       real(WP) :: time
       real(WP) :: percent
    end type timer
-   type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest
+   type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest,wt_sgs
 
    !> OU
    logical  :: use_crw
@@ -98,6 +98,7 @@ contains
          wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
          wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
          wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
+         wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
       end block initialize_timers
       
       ! Create a single-phase flow solver without bconds
@@ -169,15 +170,15 @@ contains
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
-                  myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)!*fs%cfg%vol(i,j,k)
+                  myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)*fs%cfg%vol(i,j,k)
                end do
             end do
          end do
-         call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)!; KE = KE/fs%cfg%vol_total
+         call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); KE = KE/fs%cfg%vol_total
          ! Read in Lx for calculation of KE0 - Assumes ell = 1/5 * Lx (Carrol & Blanquart 2013)
          call param_read('Lx', Lx)
          if (linforce) then
-            KE0 = KE
+            KE0 = 13.5_WP*(2.0_WP*tau_eddy)**(-2.0_WP)*(0.2_WP*Lx)**2
          else
             KE0 = 0.0_WP
          end if
@@ -370,11 +371,12 @@ contains
          call tfile%add_column(wt_pres%percent,'Pressure [%]')
          call tfile%add_column(wt_lpt%time,'LPT [s]')
          call tfile%add_column(wt_lpt%percent,'LPT [%]')
+         call tfile%add_column(wt_sgs%time,'SGS [s]')
+         call tfile%add_column(wt_sgs%percent,'SGS [%]')
          call tfile%add_column(wt_rest%time,'Rest [s]')
          call tfile%add_column(wt_rest%percent,'Rest [%]')
          call tfile%write()
       end block create_monitor
-      
       
    end subroutine simulation_init
    
@@ -414,6 +416,7 @@ contains
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
          ! Reset here fluid properties
+         wt_sgs%time_in=parallel_time()
          fs%visc=visc
          ! Turbulence modeling
          call fs%get_strainrate(SR=SR)
@@ -424,6 +427,7 @@ contains
             sgs%visc=-fs%visc
          end where
          fs%visc=fs%visc+sgs%visc
+         wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
 
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -467,12 +471,11 @@ contains
                do k=fs%cfg%kmin_,fs%cfg%kmax_
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
-                        myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)
+                        myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)*fs%cfg%vol(i,j,k)
                      end do
                   end do
                end do
-               call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-
+               call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); KE = KE/fs%cfg%vol_total
                ! Add forcing term
                resU=resU+time%dt*KE0/KE*(fs%U-meanU)/(2.0_WP*tau_eddy)
                resV=resV+time%dt*KE0/KE*(fs%V-meanV)/(2.0_WP*tau_eddy)
@@ -607,13 +610,15 @@ contains
          wt_vel%percent=wt_vel%time/wt_total%time*100.0_WP
          wt_pres%percent=wt_pres%time/wt_total%time*100.0_WP
          wt_lpt%percent=wt_lpt%time/wt_total%time*100.0_WP
-         wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_lpt%time
+         wt_sgs%percent=wt_sgs%time/wt_total%time*100.0_WP
+         wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_lpt%time-wt_sgs%time
          wt_rest%percent=wt_rest%time/wt_total%time*100.0_WP
          call tfile%write()
          wt_total%time=0.0_WP; wt_total%percent=0.0_WP
          wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
          wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
          wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
+         wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
          wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
          
       end do
