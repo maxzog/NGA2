@@ -12,6 +12,8 @@ module simulation
    use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use datafile_class,    only: datafile
+   use string,            only: str_medium
    implicit none
    private
    
@@ -27,6 +29,12 @@ module simulation
    type(partmesh) :: pmesh
    type(ensight)  :: ens_out
    type(event)    :: ens_evt
+
+   !> Provide a datafile and an event tracker for saving restarts
+   type(event)    :: save_evt
+   type(datafile) :: df
+   logical :: restarted
+   character(len=str_medium) :: resdir
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,hitfile,lptfile,sgsfile,tfile
@@ -91,6 +99,44 @@ contains
          time%itmax=2
       end block initialize_timetracker
 
+      ! Handle restart/saves here
+      restart_and_save: block ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT
+         character(len=str_medium) :: dir_restart
+         ! Create event for saving restart files
+         save_evt=event(time,'Restart output')
+         call param_read('Restart output period',save_evt%tper)
+         ! Check if we are restarting
+         call param_read(tag='Restart from',val=dir_restart,short='r',default='')
+         call param_read("Restart stash", resdir)
+         call param_read("Restart sim", restarted)
+         if (restarted) then
+            ! If we are, read the name of the directory
+            call param_read('Restart from',dir_restart,'r')
+            ! Read the datafile
+            df=datafile(pg=cfg,fdata=trim(adjustl(resdir))//trim(adjustl(dir_restart))//'/'//'data')
+         else
+            ! If we are not restarting, we will still need a datafile for saving restart files
+            ! We're only saving the velocity/pressure here, not the tracers
+            df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=5)
+            df%valname(1)='t'
+            df%valname(2)='dt'
+            df%varname(1)='U'
+            df%varname(2)='V'
+            df%varname(3)='W'
+            df%varname(4)='P'
+            df%varname(5)='visc'
+         end if
+      end block restart_and_save
+
+      ! Revisit timetracker to adjust time and time step values if this is a restart
+      update_timetracker: block
+         if (restarted) then
+            call df%pullval(name='t' ,val=time%t )
+            call df%pullval(name='dt',val=time%dt)
+            time%told=time%t-time%dt
+         end if
+      end block update_timetracker
+
       ! Initialize timers
       initialize_timers: block
          wt_total%time=0.0_WP; wt_total%percent=0.0_WP
@@ -126,6 +172,10 @@ contains
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.17_WP
+         ! Handle restart
+         if (restarted) then
+            call df%pullvar(name='visc',var=sgs%visc)
+         end if
       end block create_sgs
       
       ! Prepare initial velocity field
@@ -138,16 +188,23 @@ contains
          ! Read in velocity rms and forcing time scale
          call param_read('Initial rms',Urms0)
          call param_read('Eddy turnover time',tau_eddy)
+         if (restarted) then
+            call df%pullvar(name='U',var=fs%U)
+            call df%pullvar(name='V',var=fs%V)
+            call df%pullvar(name='W',var=fs%W)
+            call df%pullvar(name='P',var=fs%P)
+         else
          ! Gaussian initial field
-         do k=fs%cfg%kmin_,fs%cfg%kmax_
-            do j=fs%cfg%jmin_,fs%cfg%jmax_
-               do i=fs%cfg%imin_,fs%cfg%imax_
-                  fs%U(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
-                  fs%V(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
-                  fs%W(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     fs%U(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                     fs%V(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                     fs%W(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                  end do
                end do
             end do
-         end do
+         end if
          call fs%cfg%sync(fs%U)
          call fs%cfg%sync(fs%V)
          call fs%cfg%sync(fs%W)
@@ -620,8 +677,30 @@ contains
          wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
          wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
          wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
+
+                  
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            save_restart: block
+               character(len=str_medium) :: dirname,timestamp
+               ! Prefix for files
+               dirname='restart_'; write(timestamp,'(es12.5)') time%t
+               ! Prepare a new directory
+               if (fs%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(resdir))//trim(adjustl(dirname))//trim(adjustl(timestamp)))
+               ! Populate df and write it
+               call df%pushval(name='t' ,val=time%t )
+               call df%pushval(name='dt',val=time%dt)
+               call df%pushvar(name='U' ,var=fs%U   )
+               call df%pushvar(name='V' ,var=fs%V   )
+               call df%pushvar(name='W' ,var=fs%W   )
+               call df%pushvar(name='P' ,var=fs%P   )
+               call df%pushvar(name='visc' ,var=sgs%visc   )
+               call df%write(fdata=trim(adjustl(resdir))//trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
+            end block save_restart
+         end if
          
       end do
+
       
    end subroutine simulation_run
    
