@@ -16,6 +16,8 @@ module simulation
    
    !> Give ourselves two work arrays
    real(WP), dimension(:,:,:), allocatable :: U1,U2
+   real(WP), dimension(:,:,:), allocatable :: V1,V2
+   real(WP), dimension(:,:,:), allocatable :: W1,W2
    
    !> Coupler
    type(coupler) :: cpl
@@ -46,14 +48,19 @@ contains
          ! Group1 allocates and initializes the field to transfer
          create_field1: block
             use mathtools, only: twoPi
+            use random,    only: random_normal
             integer :: i,j,k
             ! Allocate array
             allocate(U1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_))
+            allocate(V1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_))
+            allocate(W1(cfg1%imino_:cfg1%imaxo_,cfg1%jmino_:cfg1%jmaxo_,cfg1%kmino_:cfg1%kmaxo_))
             ! Initialize to solid body rotation
             do k=cfg1%kmino_,cfg1%kmaxo_
                do j=cfg1%jmino_,cfg1%jmaxo_
                   do i=cfg1%imino_,cfg1%imaxo_
-                     U1(i,j,k)=-twoPi*cfg1%ym(j)
+                     U1(i,j,k)=random_normal(m=0.0_WP,sd=5.0_WP)
+                     V1(i,j,k)=random_normal(m=0.0_WP,sd=5.0_WP)
+                     W1(i,j,k)=random_normal(m=0.0_WP,sd=5.0_WP)
                   end do
                end do
             end do
@@ -62,6 +69,8 @@ contains
          ! Group1 also outputs to Ensight
          ens1=ensight(cfg=cfg1,name='grid1')
          call ens1%add_scalar('U',U1)
+         call ens1%add_scalar('V',V1)
+         call ens1%add_scalar('W',W1)
          call ens1%write_data(0.0_WP)
          
       end if
@@ -70,15 +79,21 @@ contains
       ! Group2 allocates the field to receive
       if (isInGrp2) then
          allocate(U2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
-         U2=-1.0_WP
+         allocate(V2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
+         allocate(W2(cfg2%imino_:cfg2%imaxo_,cfg2%jmino_:cfg2%jmaxo_,cfg2%kmino_:cfg2%kmaxo_))
+         U2=0.0_WP; V2=0.0_WP; W2=0.0_WP
       end if
       
       
       ! Both groups work on the coupling
       coupling_step: block
          if (isInGrp1) call cpl%push(U1)
+         if (isInGrp1) call cpl%push(V1)
+         if (isInGrp1) call cpl%push(W1)
          call cpl%transfer()
          if (isInGrp2) call cpl%pull(U2)
+         if (isInGrp2) call cpl%pull(V2)
+         if (isInGrp2) call cpl%pull(W2)
       end block coupling_step
       
       
@@ -86,6 +101,8 @@ contains
       if (isInGrp2) then
          ens2=ensight(cfg=cfg2,name='grid2')
          call ens2%add_scalar('U',U2)
+         call ens2%add_scalar('V',V2)
+         call ens2%add_scalar('W',W2)
          call ens2%add_scalar('overlap',cpl%overlap)
          call ens2%write_data(0.0_WP)
       end if

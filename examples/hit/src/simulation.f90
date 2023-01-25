@@ -45,6 +45,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,Lambda,EPSArr
    real(WP), dimension(:,:,:,:), allocatable :: SR
+   real(WP), dimension(:,:,:), allocatable :: SR2
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
 
    !> Fluid and forcing parameters
@@ -52,6 +53,7 @@ module simulation
    real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta,Re_dom
    real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE
    real(WP) :: meanvisc,Lx,tau_eddy, tau ! tau_eddy is input, tau is calculated from tke and epsilon
+   real(WP) :: tauinf,EPS0,G
    logical  :: linforce
 
    !> Wallclock time for monitoring
@@ -85,6 +87,7 @@ contains
          allocate(Lambda  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(EPSArr  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR2  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
      end block allocate_work_arrays
       
@@ -163,6 +166,8 @@ contains
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
          call param_read('Linear forcing',linforce)
+         call param_read('Steady-state epsilon',EPS0)
+         call param_read('Forcing constant (G)', G)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -235,9 +240,12 @@ contains
          ! Read in Lx for calculation of KE0 - Assumes ell = 1/5 * Lx (Carrol & Blanquart 2013)
          call param_read('Lx', Lx)
          if (linforce) then
-            KE0 = 13.5_WP*(2.0_WP*tau_eddy)**(-2.0_WP)*(0.2_WP*Lx)**2
+            ! KE0 = 13.5_WP*(2.0_WP*tau_eddy)**(-2.0_WP)*(0.2_WP*Lx)**2
+            call param_read('Steady-state TKE',KE0)
+            tauinf = 2.0_WP*KE0/(3.0_WP*EPS0)
          else
             KE0 = 0.0_WP
+            tauinf = 99999.0_WP
          end if
 
          Re_L = 0.0_WP
@@ -274,36 +282,40 @@ contains
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
          call param_read('Use CRW', use_crw)
+         if (restarted) then
+            call lp%read(filename='./test.dat')
+         else
          ! Root process initializes np particles randomly
-         if (lp%cfg%amRoot) then
-            call lp%resize(np)
-            do i=1,np
-               ! Give id
-               lp%p(i)%id=int(i,8)
-               ! Set the diameter
-               lp%p(i)%d=dp
-               ! Assign random position in the domain
-               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
-               &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
-               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
-               ! Give zero velocity
-               lp%p(i)%vel=0.0_WP
-               ! OU
-               lp%p(i)%uf=0.0_WP
-               if (use_crw) then
-                  lp%p(i)%uf= [random_normal(m=0.0_WP,sd=0.1_WP),& 
-                               random_normal(m=0.0_WP,sd=0.1_WP),&    
-                               random_normal(m=0.0_WP,sd=0.1_WP)] 
-               end if
-               ! Give zero dt
-               lp%p(i)%dt=0.0_WP
-               lp%p(i)%a_crw=0.0_WP
-               lp%p(i)%b_crw=0.0_WP
-               ! Locate the particle on the mesh
-               lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
-               ! Activate the particle
-               lp%p(i)%flag=0
-            end do
+            if (lp%cfg%amRoot) then
+               call lp%resize(np)
+               do i=1,np
+                  ! Give id
+                  lp%p(i)%id=int(i,8)
+                  ! Set the diameter
+                  lp%p(i)%d=dp
+                  ! Assign random position in the domain
+                  lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
+                  &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
+                  &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+                  ! Give zero velocity
+                  lp%p(i)%vel=0.0_WP
+                  ! OU
+                  lp%p(i)%uf=0.0_WP
+                  if (use_crw) then
+                     lp%p(i)%uf= [random_normal(m=0.0_WP,sd=0.1_WP),& 
+                                 random_normal(m=0.0_WP,sd=0.1_WP),&    
+                                 random_normal(m=0.0_WP,sd=0.1_WP)] 
+                  end if
+                  ! Give zero dt
+                  lp%p(i)%dt=0.0_WP
+                  lp%p(i)%a_crw=0.0_WP
+                  lp%p(i)%b_crw=0.0_WP
+                  ! Locate the particle on the mesh
+                  lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+                  ! Activate the particle
+                  lp%p(i)%flag=0
+               end do
+            end if
          end if
          ! Distribute particles
          call lp%sync()
@@ -325,7 +337,7 @@ contains
             pmesh%var(1,i) = lp%p(i)%id
             pmesh%vec(:,1,i) = lp%p(i)%vel
             pmesh%vec(:,2,i) = lp%p(i)%uf + lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
-            pmesh%vec(:,3,i) = lp%p(i)%uf
+            pmesh%vec(:,3,i) = lp%p(i)%uf 
          end do
       end block create_pmesh
 
@@ -509,34 +521,50 @@ contains
             linear_forcing: block
                use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
                use parallel, only: MPI_REAL_WP
-               real(WP) :: meanU,meanV,meanW,myKE
+               use messager, only: die
+               real(WP) :: meanU,meanV,meanW,myKE,A,mySR2,myvisc,meanSR2
                real(WP) :: myUvar,myVvar,myWvar,mysgsTKE
                integer :: i,j,k,ierr
                ! Calculate KE
                call fs%interp_vel(Ui,Vi,Wi)
+               call fs%get_strainrate(SR=SR)
                
                ! Calculate mean velocity
                call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
                call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
                call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
                
-               myUvar=0.0_WP
-               mysgstke=0.0_WP
-               myVvar=0.0_WP
-               myWvar=0.0_WP
+               mySR2=0.0_WP
+               myvisc=0.0_WP
                myKE=0.0_WP
+
+               SR2 = SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2 + 2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)
+               call fs%cfg%integrate(A=SR2,integral=meanSR2); meanSR2=meanSR2/fs%cfg%vol_total
+
                do k=fs%cfg%kmin_,fs%cfg%kmax_
                   do j=fs%cfg%jmin_,fs%cfg%jmax_
                      do i=fs%cfg%imin_,fs%cfg%imax_
                         myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)*fs%cfg%vol(i,j,k)
+                        myvisc=myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
+                        ! mySR2=mySR2+(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))*fs%cfg%vol(i,j,k)
                      end do
                   end do
                end do
                call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); KE = KE/fs%cfg%vol_total
+               call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
+               ! call MPI_ALLREDUCE(mySR2,meanSR2,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanSR2=meanSR2/fs%cfg%vol_total
                ! Add forcing term
-               resU=resU+time%dt*KE0/KE*(fs%U-meanU)/(2.0_WP*tau_eddy)
-               resV=resV+time%dt*KE0/KE*(fs%V-meanV)/(2.0_WP*tau_eddy)
-               resW=resW+time%dt*KE0/KE*(fs%W-meanW)/(2.0_WP*tau_eddy)
+               ! resU=resU+time%dt*KE0/KE*(fs%U-meanU)/(2.0_WP*tau_eddy)
+               ! resV=resV+time%dt*KE0/KE*(fs%V-meanV)/(2.0_WP*tau_eddy)
+               ! resW=resW+time%dt*KE0/KE*(fs%W-meanW)/(2.0_WP*tau_eddy)
+               
+               if (tauinf/G.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
+               EPS = 2.0_WP*meanvisc*meanSR2/fs%rho
+               A = (EPS - G*(KE-KE0)/tauinf)/(2.0_WP*KE)
+
+               resU=resU+time%dt*(fs%U-meanU)*A
+               resV=resV+time%dt*(fs%V-meanV)*A
+               resW=resW+time%dt*(fs%W-meanW)*A
             end block linear_forcing
             
 
@@ -591,7 +619,6 @@ contains
                integer :: i,j,k,ierr
                
                call fs%interp_vel(Ui,Vi,Wi)
-               call fs%get_strainrate(SR=SR)
 
                ! Calculate mean velocity
                call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
@@ -611,11 +638,11 @@ contains
                         myUvar=myUvar+(Ui(i,j,k)-meanU)**2*fs%cfg%vol(i,j,k)
                         myVvar=myVvar+(Wi(i,j,k)-meanW)**2*fs%cfg%vol(i,j,k)
                         myWvar=myWvar+(Wi(i,j,k)-meanV)**2*fs%cfg%vol(i,j,k)
-                        mySR2=mySR2+(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)+2*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))*fs%cfg%vol(i,j,k)
+                        mySR2=mySR2+(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))*fs%cfg%vol(i,j,k)
                         myvisc=myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
 
                         ! Epsilon - on grid
-                        EPSArr(i,j,k) = 2.0_WP*fs%visc(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)+2*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
+                        EPSArr(i,j,k) = 2.0_WP*fs%visc(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
 
                         ! Lambda  - on grid
                         Lambda(i,j,k) = sqrt(15.0_WP*fs%visc(i,j,k)/EPSArr(i,j,k))
@@ -696,6 +723,9 @@ contains
                call df%pushvar(name='P' ,var=fs%P   )
                call df%pushvar(name='visc' ,var=sgs%visc   )
                call df%write(fdata=trim(adjustl(resdir))//trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
+
+               ! Save particles
+               call lp%write(filename='./test.dat')
             end block save_restart
          end if
          

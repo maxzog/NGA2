@@ -2,20 +2,25 @@
 Partition :	1 1 4
 
 # Mesh definition
-Lx :	1
-nx :	64
+Lx :	6.2832
+nx :	96
 
 # Fluid properties
-Dynamic viscosity :    0.005
+Dynamic viscosity :    0.01
 Density :              1
 Initial rms :          5
 Eddy turnover time :   0.1
 Linear forcing :       .true.
 
+# Steadt-state (forcing) parameters
+Steady-state TKE     : 15.0
+Steady-state epsilon : 5.0
+Forcing constant (G) : 67.0
+
 # Particle properties
 Particle density :     1000
 Particle diameter :    0.0012
-Number of particles : 0 # 250000
+Number of particles :  0 # 250000
 Use CRW :              .false.
 
 # Time integration
@@ -35,7 +40,7 @@ Implicit iteration : 100
 Ensight output period : 0.01
 
 # Restart config
-Restart sim : .true.
+Restart sim : .false.
 Restart from : restart_4.83714E-01/ 
 Restart stash : ./ResData/
-Restart output period : 0.0001
+Restart output period : 0.01
