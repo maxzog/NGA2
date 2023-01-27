@@ -34,7 +34,6 @@ module simulation
    type(event)    :: save_evt
    type(datafile) :: df
    logical :: restarted
-   character(len=str_medium) :: resdir
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,hitfile,lptfile,sgsfile,tfile
@@ -45,11 +44,10 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,Lambda,EPSArr
    real(WP), dimension(:,:,:,:), allocatable :: SR
-   real(WP), dimension(:,:,:), allocatable :: SR2
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
 
    !> Fluid and forcing parameters
-   real(WP) :: visc
+   real(WP) :: visc,meanU,meanV,meanW
    real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta,Re_dom
    real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE
    real(WP) :: meanvisc,Lx,tau_eddy, tau ! tau_eddy is input, tau is calculated from tke and epsilon
@@ -87,7 +85,6 @@ contains
          allocate(Lambda  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(EPSArr  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(SR2  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
      end block allocate_work_arrays
       
@@ -103,32 +100,29 @@ contains
       end block initialize_timetracker
 
       ! Handle restart/saves here
-      restart_and_save: block ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT
-         character(len=str_medium) :: dir_restart
-         ! Create event for saving restart files
-         save_evt=event(time,'Restart output')
-         call param_read('Restart output period',save_evt%tper)
-         ! Check if we are restarting
-         call param_read(tag='Restart from',val=dir_restart,short='r',default='')
-         call param_read("Restart stash", resdir)
-         call param_read("Restart sim", restarted)
-         if (restarted) then
-            ! If we are, read the name of the directory
-            call param_read('Restart from',dir_restart,'r')
-            ! Read the datafile
-            df=datafile(pg=cfg,fdata=trim(adjustl(resdir))//trim(adjustl(dir_restart))//'/'//'data')
-         else
-            ! If we are not restarting, we will still need a datafile for saving restart files
-            ! We're only saving the velocity/pressure here, not the tracers
-            df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=5)
-            df%valname(1)='t'
-            df%valname(2)='dt'
-            df%varname(1)='U'
-            df%varname(2)='V'
-            df%varname(3)='W'
-            df%varname(4)='P'
-            df%varname(5)='visc'
-         end if
+      restart_and_save: block
+        character(len=str_medium) :: timestamp
+        ! Create event for saving restart files
+        save_evt=event(time,'Restart output')
+        call param_read('Restart output period',save_evt%tper)
+        ! Check if we are restarting
+        call param_read(tag='Restart from',val=timestamp,short='r',default='')
+        restarted=.false.; if (len_trim(timestamp).gt.0) restarted=.true.
+        if (restarted) then
+           ! If we are, read the name of the directory
+           call param_read('Restart from',timestamp,'r')
+           ! Read the datafile
+           df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
+        else
+           ! If we are not restarting, we will still need a datafile for saving restart files
+           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
+           df%valname(1)='t'
+           df%valname(2)='dt'
+           df%varname(1)='U'
+           df%varname(2)='V'
+           df%varname(3)='W'
+           df%varname(4)='P'
+        end if
       end block restart_and_save
 
       ! Revisit timetracker to adjust time and time step values if this is a restart
@@ -177,99 +171,96 @@ contains
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.17_WP
-         ! Handle restart
-         if (restarted) then
-            call df%pullvar(name='visc',var=sgs%visc)
-         end if
       end block create_sgs
       
       ! Prepare initial velocity field
       initialize_velocity: block
-         use random,   only: random_normal
-         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-         use parallel, only: MPI_REAL_WP
-         integer :: i,j,k,ierr
-         real(WP) :: myKE
-         ! Read in velocity rms and forcing time scale
-         call param_read('Initial rms',Urms0)
-         call param_read('Eddy turnover time',tau_eddy)
-         if (restarted) then
-            call df%pullvar(name='U',var=fs%U)
-            call df%pullvar(name='V',var=fs%V)
-            call df%pullvar(name='W',var=fs%W)
-            call df%pullvar(name='P',var=fs%P)
-         else
-         ! Gaussian initial field
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     fs%U(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
-                     fs%V(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
-                     fs%W(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
-                  end do
-               end do
-            end do
-         end if
-         call fs%cfg%sync(fs%U)
-         call fs%cfg%sync(fs%V)
-         call fs%cfg%sync(fs%W)
-         ! Project to ensure divergence-free
-         call fs%get_div()
-         fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
-         fs%psolv%sol=0.0_WP
-         call fs%psolv%solve()
-         call fs%shift_p(fs%psolv%sol)
-         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-         fs%P=fs%P+fs%psolv%sol
-         fs%U=fs%U-time%dt*resU/fs%rho
-         fs%V=fs%V-time%dt*resV/fs%rho
-         fs%W=fs%W-time%dt*resW/fs%rho
-         ! Calculate cell-centered velocities and divergence
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
-         ! Calculate KE0
-         myKE=0.0_WP
-         do k=fs%cfg%kmin_,fs%cfg%kmax_
-            do j=fs%cfg%jmin_,fs%cfg%jmax_
-               do i=fs%cfg%imin_,fs%cfg%imax_
-                  myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)*fs%cfg%vol(i,j,k)
-               end do
-            end do
-         end do
-         call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); KE = KE/fs%cfg%vol_total
-         ! Read in Lx for calculation of KE0 - Assumes ell = 1/5 * Lx (Carrol & Blanquart 2013)
-         call param_read('Lx', Lx)
-         if (linforce) then
-            ! KE0 = 13.5_WP*(2.0_WP*tau_eddy)**(-2.0_WP)*(0.2_WP*Lx)**2
-            call param_read('Steady-state TKE',KE0)
-            tauinf = 2.0_WP*KE0/(3.0_WP*EPS0)
-         else
-            KE0 = 0.0_WP
-            tauinf = 99999.0_WP
-         end if
+        use random,   only: random_normal
+        use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+        use parallel, only: MPI_REAL_WP
+        integer :: i,j,k,ierr
+        real(WP) :: myKE
+        ! Read in velocity rms and forcing time scale
+        call param_read('Initial rms',Urms0)
+        call param_read('Eddy turnover time',tau_eddy)
+        if (restarted) then
+           call df%pullvar(name='U',var=fs%U)
+           call df%pullvar(name='V',var=fs%V)
+           call df%pullvar(name='W',var=fs%W)
+           call df%pullvar(name='P',var=fs%P)
+        else
+           ! Gaussian initial field
+           do k=fs%cfg%kmin_,fs%cfg%kmax_
+              do j=fs%cfg%jmin_,fs%cfg%jmax_
+                 do i=fs%cfg%imin_,fs%cfg%imax_
+                    fs%U(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                    fs%V(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                    fs%W(i,j,k)=random_normal(m=0.0_WP,sd=Urms0)
+                 end do
+              end do
+           end do
+           call fs%cfg%sync(fs%U)
+           call fs%cfg%sync(fs%V)
+           call fs%cfg%sync(fs%W)
+           ! Project to ensure divergence-free
+           call fs%get_div()
+           fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
+           fs%psolv%sol=0.0_WP
+           call fs%psolv%solve()
+           call fs%shift_p(fs%psolv%sol)
+           call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
+           fs%P=fs%P+fs%psolv%sol
+           fs%U=fs%U-time%dt*resU/fs%rho
+           fs%V=fs%V-time%dt*resV/fs%rho
+           fs%W=fs%W-time%dt*resW/fs%rho
+        end if
 
-         Re_L = 0.0_WP
-         Re_dom = 0.0_WP
-         Re_lambda = 0.0_WP
-         eta = 0.0_WP
-         TKE = 0.0_WP
-         meanvisc = 0.0_WP
-         sgsTKE = 0.0_WP
-         tau = 0.0_WP
-         URMS = 0.0_WP
-         ell = 0.0_WP
-         EPS = 0.0_WP
-         Lambda = 0.0_WP
-         EPSArr = 0.0_WP
+        ! Calculate cell-centered velocities and divergence
+        call fs%interp_vel(Ui,Vi,Wi)
+        call fs%get_div()
+        ! Calculate KE0
+        myKE=0.0_WP
+        do k=fs%cfg%kmin_,fs%cfg%kmax_
+           do j=fs%cfg%jmin_,fs%cfg%jmax_
+              do i=fs%cfg%imin_,fs%cfg%imax_
+                 myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)*fs%cfg%vol(i,j,k)
+              end do
+           end do
+        end do
+        call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); KE = KE/fs%cfg%vol_total
+        ! Read in Lx for calculation of KE0 - Assumes ell = 1/5 * Lx (Carrol & Blanquart 2013)
+        call param_read('Lx', Lx)
+        if (linforce) then
+           ! KE0 = 13.5_WP*(2.0_WP*tau_eddy)**(-2.0_WP)*(0.2_WP*Lx)**2
+           call param_read('Steady-state TKE',KE0)
+           tauinf = 2.0_WP*KE0/(3.0_WP*EPS0)
+        else
+           KE0 = 0.0_WP
+           tauinf = 99999.0_WP
+        end if
 
+        Re_L = 0.0_WP
+        Re_dom = 0.0_WP
+        Re_lambda = 0.0_WP
+        eta = 0.0_WP
+        TKE = 0.0_WP
+        meanvisc = 0.0_WP
+        sgsTKE = 0.0_WP
+        tau = 0.0_WP
+        URMS = 0.0_WP
+        ell = 0.0_WP
+        EPS = 0.0_WP
+        Lambda = 0.0_WP
+        EPSArr = 0.0_WP
       end block initialize_velocity
-      
-      
+
+
       ! Initialize LPT solver
       initialize_lpt: block
          use random, only: random_uniform, random_normal
          real(WP) :: dp
          integer :: i,np
+         character(len=str_medium) :: timestamp
          ! Create solver
          lp=lpt(cfg=cfg,name='LPT')
          ! Get drag model from the inpit
@@ -283,7 +274,9 @@ contains
          ! Check if a stochastic SGS model is used
          call param_read('Use CRW', use_crw)
          if (restarted) then
-            call lp%read(filename='./test.dat')
+            call param_read('Restart from',timestamp,'r')
+            ! Read the part file
+            call lp%read(filename='restart/part_'//trim(adjustl(timestamp)))
          else
          ! Root process initializes np particles randomly
             if (lp%cfg%amRoot) then
@@ -316,9 +309,9 @@ contains
                   lp%p(i)%flag=0
                end do
             end if
+            ! Distribute particles
+            call lp%sync()
          end if
-         ! Distribute particles
-         call lp%sync()
       end block initialize_lpt
       
 
@@ -373,8 +366,11 @@ contains
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(time%cfl,'Maximum CFL')
          call mfile%add_column(fs%Umax,'Umax')
+         call mfile%add_column(meanU,'Umean')
          call mfile%add_column(fs%Vmax,'Vmax')
+         call mfile%add_column(meanV,'Vmean')
          call mfile%add_column(fs%Wmax,'Wmax')
+         call mfile%add_column(meanW,'Wmean')
          call mfile%add_column(fs%Pmax,'Pmax')
          call mfile%add_column(KE,'Kinetic energy')
          call mfile%add_column(fs%divmax,'Maximum divergence')
@@ -471,7 +467,7 @@ contains
          wt_lpt%time_in=parallel_time()
 
          ! Advance particles by dt
-         resU=fs%rho; resV=fs%visc
+         resU=fs%rho; resV=visc
          call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,use_crw=use_crw,sgs=sgs)
 
          ! LPT time end
@@ -481,13 +477,10 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-         
-         ! Apply time-varying Dirichlet conditions
-         ! This is where time-dpt Dirichlet would be enforced
-         ! Reset here fluid properties
+
+         ! Turbulence modeling
          wt_sgs%time_in=parallel_time()
          fs%visc=visc
-         ! Turbulence modeling
          call fs%get_strainrate(SR=SR)
          call fs%get_gradu(gradu=gradu)
          resU=fs%rho
@@ -511,62 +504,54 @@ contains
             
             ! Explicit calculation of drho*u/dt from NS
             call fs%get_dmomdt(resU,resV,resW)
-           
+
             ! Assemble explicit residual
             resU=-2.0_WP*(fs%rho*fs%U-fs%rho*fs%Uold)+time%dt*resU
             resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
             resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
-            
+
             ! Add linear forcing term
             linear_forcing: block
-               use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-               use parallel, only: MPI_REAL_WP
-               use messager, only: die
-               real(WP) :: meanU,meanV,meanW,myKE,A,mySR2,myvisc,meanSR2
-               real(WP) :: myUvar,myVvar,myWvar,mysgsTKE
-               integer :: i,j,k,ierr
-               ! Calculate KE
-               call fs%interp_vel(Ui,Vi,Wi)
-               call fs%get_strainrate(SR=SR)
-               
-               ! Calculate mean velocity
-               call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
-               
-               mySR2=0.0_WP
-               myvisc=0.0_WP
-               myKE=0.0_WP
+              use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+              use parallel, only: MPI_REAL_WP
+              use messager, only: die
+              real(WP) :: myKE,A,myvisc
+              real(WP) :: myUvar,myVvar,myWvar,mysgsTKE,myGradU2,gradU2
+              integer :: i,j,k,ierr
 
-               SR2 = SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2 + 2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)
-               call fs%cfg%integrate(A=SR2,integral=meanSR2); meanSR2=meanSR2/fs%cfg%vol_total
+              ! Calculate mean velocity
+              call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
+              call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
+              call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
 
-               do k=fs%cfg%kmin_,fs%cfg%kmax_
-                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                     do i=fs%cfg%imin_,fs%cfg%imax_
-                        myKE=myKE+0.5_WP*(Ui(i,j,k)**2+Vi(i,j,k)**2+Wi(i,j,k)**2)*fs%cfg%vol(i,j,k)
-                        myvisc=myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
-                        ! mySR2=mySR2+(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))*fs%cfg%vol(i,j,k)
-                     end do
-                  end do
-               end do
-               call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); KE = KE/fs%cfg%vol_total
-               call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
-               ! call MPI_ALLREDUCE(mySR2,meanSR2,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanSR2=meanSR2/fs%cfg%vol_total
-               ! Add forcing term
-               ! resU=resU+time%dt*KE0/KE*(fs%U-meanU)/(2.0_WP*tau_eddy)
-               ! resV=resV+time%dt*KE0/KE*(fs%V-meanV)/(2.0_WP*tau_eddy)
-               ! resW=resW+time%dt*KE0/KE*(fs%W-meanW)/(2.0_WP*tau_eddy)
-               
-               if (tauinf/G.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
-               EPS = 2.0_WP*meanvisc*meanSR2/fs%rho
-               A = (EPS - G*(KE-KE0)/tauinf)/(2.0_WP*KE)
+              ! Calculate KE and EPS
+              call fs%interp_vel(Ui,Vi,Wi)
+              call fs%get_gradu(gradu=gradu)
+              myvisc=0.0_WP; myKE=0.0_WP; myGradU2=0.0_WP
+              do k=fs%cfg%kmin_,fs%cfg%kmax_
+                 do j=fs%cfg%jmin_,fs%cfg%jmax_
+                    do i=fs%cfg%imin_,fs%cfg%imax_
+                       myKE=myKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+                       myvisc=myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
+                       myGradU2=myGradU2+fs%cfg%vol(i,j,k)*(                              &
+                            gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
+                            gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
+                            gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
+                    end do
+                 end do
+              end do
+              call MPI_ALLREDUCE(myKE,KE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); KE = KE/fs%cfg%vol_total
+              call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
+              call MPI_ALLREDUCE(myGradU2,gradU2,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); gradU2 = gradU2/fs%cfg%vol_total
 
-               resU=resU+time%dt*(fs%U-meanU)*A
-               resV=resV+time%dt*(fs%V-meanV)*A
-               resW=resW+time%dt*(fs%W-meanW)*A
+              if (tauinf/G.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
+              EPS = meanvisc*gradU2/fs%rho
+              A = (EPS - G*(KE-KE0)/tauinf)/(2.0_WP*KE)*fs%rho
+
+              resU=resU+time%dt*(fs%U-meanU)*A
+              resV=resV+time%dt*(fs%V-meanV)*A
+              resW=resW+time%dt*(fs%W-meanW)*A
             end block linear_forcing
-            
 
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
@@ -608,22 +593,21 @@ contains
          call fs%get_div()
          wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
             
-         
+         ! Calculate mean velocity
+         call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
+         call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
+         call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
          ! Compute turbulence statistics for monitor
          compute_stats: block 
                use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
                use parallel, only: MPI_REAL_WP
-               real(WP) :: meanU,meanV,meanW,meanSR2
+               real(WP) :: meanSR2
                real(WP) :: myUvar,myVvar,myWvar,mySR2
                real(WP) :: mysgstke,myvisc
                integer :: i,j,k,ierr
                
                call fs%interp_vel(Ui,Vi,Wi)
 
-               ! Calculate mean velocity
-               call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
-               call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
 
                mySR2=0.0_WP
                myUvar=0.0_WP
@@ -646,6 +630,7 @@ contains
 
                         ! Lambda  - on grid
                         Lambda(i,j,k) = sqrt(15.0_WP*fs%visc(i,j,k)/EPSArr(i,j,k))
+
                      end do
                   end do
                end do
@@ -655,6 +640,8 @@ contains
                call MPI_ALLREDUCE(myWvar,Wvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); Wvar=Wvar/fs%cfg%vol_total
                call MPI_ALLREDUCE(mysgstke,sgsTKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKE=sgsTKE/fs%cfg%vol_total
                call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
+
+
                ! Calculate <s_ij s_ij>
                call MPI_ALLREDUCE(mySR2,meanSR2,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanSR2=meanSR2/fs%cfg%vol_total
                TKE = 0.5_WP*(Uvar+Vvar+Wvar)
@@ -705,27 +692,24 @@ contains
          wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
          wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
 
-                  
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then
             save_restart: block
-               character(len=str_medium) :: dirname,timestamp
-               ! Prefix for files
-               dirname='restart_'; write(timestamp,'(es12.5)') time%t
-               ! Prepare a new directory
-               if (fs%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(resdir))//trim(adjustl(dirname))//trim(adjustl(timestamp)))
-               ! Populate df and write it
-               call df%pushval(name='t' ,val=time%t )
-               call df%pushval(name='dt',val=time%dt)
-               call df%pushvar(name='U' ,var=fs%U   )
-               call df%pushvar(name='V' ,var=fs%V   )
-               call df%pushvar(name='W' ,var=fs%W   )
-               call df%pushvar(name='P' ,var=fs%P   )
-               call df%pushvar(name='visc' ,var=sgs%visc   )
-               call df%write(fdata=trim(adjustl(resdir))//trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
-
-               ! Save particles
-               call lp%write(filename='./test.dat')
+              character(len=str_medium) :: timestamp
+              ! Prefix for files
+              write(timestamp,'(es12.5)') time%t
+              ! Prepare a new directory
+              if (fs%cfg%amRoot) call execute_command_line('mkdir -p restart')
+              ! Populate df and write it
+              call df%pushval(name='t' ,val=time%t     )
+              call df%pushval(name='dt',val=time%dt    )
+              call df%pushvar(name='U' ,var=fs%U       )
+              call df%pushvar(name='V' ,var=fs%V       )
+              call df%pushvar(name='W' ,var=fs%W       )
+              call df%pushvar(name='P' ,var=fs%P       )
+              call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
+              ! Write particle file
+              call lp%write(filename='restart/part_'//trim(adjustl(timestamp)))
             end block save_restart
          end if
          
