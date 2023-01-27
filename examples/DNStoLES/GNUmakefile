@@ -9,7 +9,7 @@ USE_LAPACK= TRUE
 USE_IRL   = FALSE
 USE_FFTW  = TRUE
 PROFILE   = FALSE
-DEBUG     = TRUE
+DEBUG     = FALSE
 COMP      = gnu
 EXEBASE   = nga
 
@@ -25,9 +25,9 @@ VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
 #HDF5_DIR = /Users/desjardi/Builds/hdf5
-LAPACK_DIR= /usr/local/Cellar/lapack/3.11
-HYPRE_DIR = /Users/maxzog/builds/hypre/src/hypre
-FFTW_DIR  = /usr/local/Cellar/fftw/3.3.10_1
+LAPACK_DIR= /usr/lapack/
+HYPRE_DIR = /opt/libs/hypre/
+FFTW_DIR  = /usr/
 #IRL_DIR   = /Users/maxzog/IRL/
 
 # NGA compilation definitions

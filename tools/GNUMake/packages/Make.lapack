@@ -1,6 +1,6 @@
 # Add appropriate LAPACK includes and libraries
 ifdef LAPACK_DIR
-  LIBRARY_LOCATIONS += $(LAPACK_DIR)/lib
+  LIBRARY_LOCATIONS += $(LAPACK_DIR)/
   LIBRARIES += -llapack -lblas
 else
   ifeq ($(os_name), Darwin)
