@@ -2,25 +2,26 @@
 Partition :	1 1 4
 
 # Mesh definition
-Lx :	6.2832
+Lx :	1.0
 nx :	64
 
 # Fluid properties
 Dynamic viscosity :    0.02
 Density :              1
-Initial rms :          5
+Initial rms :          10
 Eddy turnover time :   0.1
 Linear forcing :       .true.
 
 # Steadt-state (forcing) parameters
 Steady-state TKE     : 3.0
 Steady-state epsilon : 6.0
-Forcing constant (G) : 67.0
+Forcing constant (G) : 35.0
+Force to maximum Re_lambda : .true.
 
 # Particle properties
 Particle density :     1000
 Particle diameter :    0.0012
-Number of particles :  0 # 250000
+Number of particles :  10000 # 250000
 Use CRW :              .false.
 
 # Time integration
