@@ -26,6 +26,7 @@ module simulation
    type(datafile) :: dfLES
 
    character(len=str_medium) :: dir_write
+   real(WP) :: dt
 
    !> Solver declaration
    type(incomp),      public :: fsd
@@ -57,9 +58,9 @@ contains
       ! Read in DNS datafile
       readDNS: block
          character(len=str_medium) :: dir_read
-         call param_read('DNS read directory', dir_read)
+         call param_read('File to be interpolated', dir_read)
          ! Read the datafile
-         dfDNS=datafile(pg=cfg1,fdata=trim(adjustl(dir_read))//'/'//'data')
+         dfDNS=datafile(pg=cfg1,fdata=trim(adjustl(dir_read)))
          call dfDNS%pullvar(name='U',var=fsd%U)
          call dfDNS%pullvar(name='V',var=fsd%V)
          call dfDNS%pullvar(name='W',var=fsd%W)
@@ -68,16 +69,15 @@ contains
 
       ! Init LES datafile
       initLES: block
-         call param_read('LES write directory', dir_write)
+         call param_read('Output file name', dir_write)
          ! Init the datafile to write
-         dfLES=datafile(pg=cfg2,filename=trim(dir_write),nval=2,nvar=5)
+         dfLES=datafile(pg=cfg2,filename=trim(dir_write),nval=2,nvar=4)
          dfLES%valname(1)='t'
          dfLES%valname(2)='dt'
          dfLES%varname(1)='U'
          dfLES%varname(2)='V'
          dfLES%varname(3)='W'
          dfLES%varname(4)='P'
-         dfLES%varname(5)='visc'
       end block initlES
       
       ! Both groups prepare the coupler
@@ -155,12 +155,17 @@ contains
          call dfLES%pushvar(name='P' ,var=fsl%P   )
       end block coupling_step4
           
+      coupling_step5: block
+         call dfDNS%pullval(name='dt' ,val=dt   )
+         call dfLES%pushval(name='dt' ,val=dt   )
+      end block coupling_step5
+      
       ! Group2 outputs its received data
       if (isInGrp2) then
          call ens2%add_scalar('overlap',cpl%overlap)
          call ens2%write_data(0.0_WP)
 
-         call dfLES%write(fdata=trim(adjustl(dir_write))//'/'//'data')
+         call dfLES%write(fdata=trim(adjustl(dir_write)))
       end if
       
    end subroutine simulation_init
@@ -202,7 +207,7 @@ contains
       call MPI_ALLREDUCE(myKE,KELES,1,MPI_REAL_WP,MPI_SUM,fsl%cfg%comm,ierr); KELES = KELES/fsl%cfg%vol_total
 
       ratio = KELES / KEDNS
-      if (fsd%cfg%amRoot) print *, "TKE_LES / TKE_DNS = ", ratio
+      if (fsd%cfg%amRoot) print *, "TKE_interp / TKE_input = ", ratio
 
    end subroutine simulation_run
    
