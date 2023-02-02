@@ -689,7 +689,7 @@ contains
       class(ensight), intent(in) :: this
       type(prt), pointer, intent(in) :: part
       character(len=str_medium) :: filename
-      integer :: iunit,ierr,rank,n,i
+      integer :: iunit,ierr,rank,n
       character(len=80) :: cbuff
       integer :: ibuff,npart
       
@@ -705,7 +705,6 @@ contains
          do n=1,part%ptr%nvar
             write(iunit,'(a)') 'scalar per measured node: 1 '//trim(part%ptr%varname(n))//' '//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.******'
          end do
-         ! Write the vectors
          do n=1,part%ptr%nvec
             write(iunit,'(a)') 'vector per measured node: 1 '//trim(part%ptr%vecname(n))//' '//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.******'
          end do
@@ -750,7 +749,7 @@ contains
          call MPI_BARRIER(this%cfg%comm,ierr)
       end do
       
-      ! Generate the additional variable files
+      ! Generate the particle scalar files
       do n=1,part%ptr%nvar
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%varname(n))//'.'
          write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
@@ -779,8 +778,8 @@ contains
             call MPI_BARRIER(this%cfg%comm,ierr)
          end do
       end do
-     
-      ! Generate the additional vector files
+      
+      ! Generate the particle vector files
       do n=1,part%ptr%nvec
          filename='ensight/'//trim(this%name)//'/'//trim(part%name)//'/'//trim(part%ptr%vecname(n))//'.'
          write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') this%ntime
@@ -809,7 +808,7 @@ contains
             call MPI_BARRIER(this%cfg%comm,ierr)
          end do
       end do
-
+      
    end subroutine write_part
    
    

@@ -20,7 +20,7 @@ Force to maximum Re_lambda : .true.
 
 # Particle properties
 Particle density :     1000
-Particle diameter :    0.0012
+Particle Stokes number :    1.0
 Number of particles :  10000 # 250000
 Use CRW :              .false.
 

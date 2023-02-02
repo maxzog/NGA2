@@ -52,8 +52,8 @@ module simulation
    real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE
    real(WP) :: meanvisc,Lx,tau_eddy,N,tau,dx_eta,ell_Lx
    real(WP) :: tauinf,EPS0,G,Gdtau,Gdtaui,dx,eps_ratio,tke_ratio,nondtime
+   integer  :: sgs_type
    logical  :: linforce,use_sgs,maxRe
-   character(len=str_medium) :: sgs_type
 
    !> Wallclock time for monitoring
    type :: timer
@@ -193,7 +193,6 @@ contains
         call param_read('Lx', Lx)
         call param_read('nx', N)
         if (linforce) then
-           ! KE0 = 13.5_WP*(2.0_WP*tau_eddy)**(-2.0_WP)*(0.2_WP*Lx)**2
            if (maxRE) then
                EPS0 = (visc/fs%rho)**3*(Pi*N/(1.5_WP*Lx))**4
                KE0 = 1.5_WP*(0.2_WP*Lx*EPS0)**(0.6667_WP)
@@ -313,7 +312,7 @@ contains
          eps_ratio = EPS/EPS0
          tke_ratio = TKE/KE0
          ell_Lx    = ell/Lx
-         Re_ratio  = Re_lam/Re_max
+         Re_ratio  = Re_lambda/Re_max
       end block compute_stats
 
 
@@ -733,7 +732,7 @@ contains
                eps_ratio = EPS/EPS0
                tke_ratio = TKE/KE0
                ell_Lx    = ell/Lx
-               Re_ratio  = Re_lam/Re_max
+               Re_ratio  = Re_lambda/Re_max
          end block compute_stats
          wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
 

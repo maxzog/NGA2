@@ -49,7 +49,7 @@ module simulation
    !> Fluid and forcing parameters
    real(WP) :: visc,meanU,meanV,meanW
    real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta,Re_dom,Re_max,Re_ratio
-   real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE
+   real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE,stk,teta
    real(WP) :: meanvisc,Lx,tau_eddy,N,tau,dx_eta,ell_Lx
    real(WP) :: tauinf,EPS0,G,Gdtau,Gdtaui,dx,eps_ratio,tke_ratio,nondtime
    logical  :: linforce,use_sgs,maxRe
@@ -307,13 +307,14 @@ contains
          eta = (meanvisc**3.0_WP/EPS)**0.25_WP
          ell = (0.6667_WP*TKE)**1.5_WP / EPS
          tau  = (TKE+sgsTKE) / EPS
+         teta = sqrt(visc/EPS0)
 
          nondtime  = time%t/tauinf
          dx_eta    = dx/eta
          eps_ratio = EPS/EPS0
          tke_ratio = TKE/KE0
          ell_Lx    = ell/Lx
-         Re_ratio  = Re_lam/Re_max
+         Re_ratio  = Re_lambda/Re_max
       end block compute_stats
 
 
@@ -330,7 +331,7 @@ contains
          ! Get particle density from the input
          call param_read('Particle density',lp%rho)
          ! Get particle diameter from the input
-         call param_read('Particle diameter',dp)
+         call param_read('Particle Stokes number', stk)
          ! Get number of particles
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
@@ -342,6 +343,7 @@ contains
          else
          ! Root process initializes np particles randomly
             if (lp%cfg%amRoot) then
+               dp = sqrt(18.0_WP*visc*stk*teta/lp%rho)
                call lp%resize(np)
                do i=1,np
                   ! Give id
@@ -733,7 +735,7 @@ contains
                eps_ratio = EPS/EPS0
                tke_ratio = TKE/KE0
                ell_Lx    = ell/Lx
-               Re_ratio  = Re_lam/Re_max
+               Re_ratio  = Re_lambda/Re_max
          end block compute_stats
          wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
 

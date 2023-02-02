@@ -1,28 +1,41 @@
 # Parallelization
 Partition :	1 1 4
 
-
 # Mesh definition
-Lx :	1
-nx :	32
+Lx :	1.0
+nx :	64
 
 # Fluid properties
-Dynamic viscosity :    0.01
+Dynamic viscosity :    0.02
 Density :              1
-Initial rms :          5
+Initial rms :          10
 Eddy turnover time :   0.1
 Linear forcing :       .true.
+
+# Steady-state (forcing) parameters
+Steady-state TKE     : 3.0
+Steady-state epsilon : 6.0
+Forcing constant (G) : 35.0
+Force to maximum Re_lambda : .false.
+
+# LES/SGS
+# -Dynamic Smagorinsky  = 1
+# -Constant Smagorinsky = 2
+# -Vreman (2004)        = 3
+# =Off                  = 4
+Use SGS model  : .true.
+SGS model type : 3
 
 # Particle properties
 Particle density :     1000
 Particle diameter :    0.0012
-Number of particles :  25000
+Number of particles :  #10000 # 250000
 Use CRW :              .false.
 
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
-Max iter :          2000
+Max iter :          1500
 
 # Pressure solver
 Pressure tolerance : 1e-6
@@ -34,3 +47,8 @@ Implicit iteration : 100
 
 # Ensight output
 Ensight output period : 0.01
+
+# Restart config
+Restart sim : .true.
+Restart from : 
+Restart output period : 0.01

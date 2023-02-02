@@ -6,7 +6,6 @@ module incomp_class
    use precision,      only: WP
    use string,         only: str_medium
    use config_class,   only: config
-   use ils_class,      only: ils
    use linsol_class,   only: linsol
    use iterator_class, only: iterator
    implicit none
@@ -68,19 +67,15 @@ module incomp_class
       ! Flow divergence
       real(WP), dimension(:,:,:), allocatable :: div      !< Divergence array
       
-  !    ! Pressure solver
-  !    type(ils) :: psolv                                  !< Iterative linear solver object for the pressure Poisson equation
-  !    
-  !    ! Implicit velocity solver
-  !    type(ils) :: implicit                               !< Iterative linear solver object for an implicit prediction of the NS residual
-      
       ! Pressure solver
       class(linsol), pointer :: psolv                     !< Iterative linear solver object for the pressure Poisson equation
       
       ! Implicit velocity solver
       class(linsol), pointer :: implicit                  !< Iterative linear solver object for an implicit prediction of the NS residual
+      
       ! Metrics
       real(WP), dimension(:,:,:,:,:), allocatable :: itp_xy,itp_yz,itp_xz !< Interpolation for viscosity
+      real(WP), dimension(:,:,:,:), allocatable :: itpi_x,itpi_y,itpi_z   !< Interpolation for Ui/Vi/Wi
       real(WP), dimension(:,:,:,:), allocatable :: itpu_x,itpu_y,itpu_z   !< Interpolation for U
       real(WP), dimension(:,:,:,:), allocatable :: itpv_x,itpv_y,itpv_z   !< Interpolation for V
       real(WP), dimension(:,:,:,:), allocatable :: itpw_x,itpw_y,itpw_z   !< Interpolation for W
@@ -171,12 +166,6 @@ contains
       allocate(self%Vold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Vold=0.0_WP
       allocate(self%Wold(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Wold=0.0_WP
       
-      ! Create pressure solver object
-    !  self%psolv   =ils(cfg=self%cfg,name='Pressure')
-      
-      ! Create implicit velocity solver object
-  !    self%implicit=ils(cfg=self%cfg,name='Momentum')
-      
       ! Prepare default metrics
       call self%init_metrics()
       
@@ -260,6 +249,22 @@ contains
       class(incomp), intent(inout) :: this
       integer :: i,j,k,st1,st2
       real(WP), dimension(-1:0) :: itpx,itpy,itpz
+      
+      
+      ! Allocate finite difference Ui/Vi/Wi interpolation coefficients
+      allocate(this%itpi_x(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< X-face-centered
+      allocate(this%itpi_y(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Y-face-centered
+      allocate(this%itpi_z(-1:0,this%cfg%imin_:this%cfg%imax_+1,this%cfg%jmin_:this%cfg%jmax_+1,this%cfg%kmin_:this%cfg%kmax_+1)) !< Z-face-centered
+      ! Create interpolation coefficients to cell face
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               this%itpi_x(:,i,j,k)=this%cfg%dxmi(i)*[this%cfg%xm(i)-this%cfg%x(i),this%cfg%x(i)-this%cfg%xm(i-1)] !< Linear interpolation in x from [xm,ym,zm] to [x,ym,zm]
+               this%itpi_y(:,i,j,k)=this%cfg%dymi(j)*[this%cfg%ym(j)-this%cfg%y(j),this%cfg%y(j)-this%cfg%ym(j-1)] !< Linear interpolation in y from [xm,ym,zm] to [xm,y,zm]
+               this%itpi_z(:,i,j,k)=this%cfg%dzmi(k)*[this%cfg%zm(k)-this%cfg%z(k),this%cfg%z(k)-this%cfg%zm(k-1)] !< Linear interpolation in z from [xm,ym,zm] to [xm,ym,z]
+            end do
+         end do
+      end do
       
       ! Allocate finite difference viscosity interpolation coefficients
       allocate(this%itp_xy(-1:0,-1:0,this%cfg%imino_+1:this%cfg%imaxo_,this%cfg%jmino_+1:this%cfg%jmaxo_,this%cfg%kmino_+1:this%cfg%kmaxo_)) !< Edge-centered (xy)
@@ -455,6 +460,17 @@ contains
       if (.not.this%cfg%xper.and.this%cfg%iproc.eq.1) this%umask(this%cfg%imino,:,:)=this%umask(this%cfg%imino+1,:,:)
       if (.not.this%cfg%yper.and.this%cfg%jproc.eq.1) this%vmask(:,this%cfg%jmino,:)=this%vmask(:,this%cfg%jmino+1,:)
       if (.not.this%cfg%zper.and.this%cfg%kproc.eq.1) this%wmask(:,:,this%cfg%kmino)=this%wmask(:,:,this%cfg%kmino+1)
+
+      ! Adjust Ui/Vi/Wi interpolation coefficients back to cell faces in the presence of walls (only walls!)
+      do k=this%cfg%kmin_,this%cfg%kmax_+1
+         do j=this%cfg%jmin_,this%cfg%jmax_+1
+            do i=this%cfg%imin_,this%cfg%imax_+1
+               if (this%umask(i,j,k).eq.1) this%itpi_x(:,i,j,k)=0.0_WP
+               if (this%vmask(i,j,k).eq.1) this%itpi_y(:,i,j,k)=0.0_WP
+               if (this%wmask(i,j,k).eq.1) this%itpi_z(:,i,j,k)=0.0_WP
+            end do
+         end do
+      end do
       
       ! Adjust interpolation coefficients to cell centers in the presence of walls (only walls!)
       do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -788,70 +804,6 @@ contains
       end if
       
    end subroutine setup
-   
-!   !> Finish setting up the flow solver now that bconds have been defined
-!   subroutine setup(this,pressure_ils,implicit_ils)
-!      implicit none
-!      class(incomp), intent(inout) :: this
-!      integer, intent(in) :: pressure_ils
-!      integer, intent(in) :: implicit_ils
-!      integer :: i,j,k
-!      
-!      ! Adjust metrics based on bcflag array
-!      call this%adjust_metrics()
-!      
-!      ! Set 7-pt stencil map for the pressure solver
-!      this%psolv%stc(1,:)=[ 0, 0, 0]
-!      this%psolv%stc(2,:)=[+1, 0, 0]
-!      this%psolv%stc(3,:)=[-1, 0, 0]
-!      this%psolv%stc(4,:)=[ 0,+1, 0]
-!      this%psolv%stc(5,:)=[ 0,-1, 0]
-!      this%psolv%stc(6,:)=[ 0, 0,+1]
-!      this%psolv%stc(7,:)=[ 0, 0,-1]
-!      
-!      ! Setup the scaled Laplacian operator from incomp metrics: lap(*)=-vol*div(grad(*))
-!      do k=this%cfg%kmin_,this%cfg%kmax_
-!         do j=this%cfg%jmin_,this%cfg%jmax_
-!            do i=this%cfg%imin_,this%cfg%imax_
-!               ! Set Laplacian
-!               this%psolv%opr(1,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x(-1,i+1,j,k)+&
-!               &                       this%divp_x(0,i,j,k)*this%divu_x( 0,i  ,j,k)+&
-!               &                       this%divp_y(1,i,j,k)*this%divv_y(-1,i,j+1,k)+&
-!               &                       this%divp_y(0,i,j,k)*this%divv_y( 0,i,j  ,k)+&
-!               &                       this%divp_z(1,i,j,k)*this%divw_z(-1,i,j,k+1)+&
-!               &                       this%divp_z(0,i,j,k)*this%divw_z( 0,i,j,k  )
-!               this%psolv%opr(2,i,j,k)=this%divp_x(1,i,j,k)*this%divu_x( 0,i+1,j,k)
-!               this%psolv%opr(3,i,j,k)=this%divp_x(0,i,j,k)*this%divu_x(-1,i  ,j,k)
-!               this%psolv%opr(4,i,j,k)=this%divp_y(1,i,j,k)*this%divv_y( 0,i,j+1,k)
-!               this%psolv%opr(5,i,j,k)=this%divp_y(0,i,j,k)*this%divv_y(-1,i,j  ,k)
-!               this%psolv%opr(6,i,j,k)=this%divp_z(1,i,j,k)*this%divw_z( 0,i,j,k+1)
-!               this%psolv%opr(7,i,j,k)=this%divp_z(0,i,j,k)*this%divw_z(-1,i,j,k  )
-!               ! Scale it by the cell volume
-!               this%psolv%opr(:,i,j,k)=-this%psolv%opr(:,i,j,k)*this%cfg%vol(i,j,k)
-!            end do
-!         end do
-!      end do
-!      
-!      ! Initialize the pressure Poisson solver
-!      call this%psolv%init(pressure_ils)
-!      call this%psolv%setup()
-!      
-!      ! Set 7-pt stencil map for the velocity solver
-!      this%implicit%stc(1,:)=[ 0, 0, 0]
-!      this%implicit%stc(2,:)=[+1, 0, 0]
-!      this%implicit%stc(3,:)=[-1, 0, 0]
-!      this%implicit%stc(4,:)=[ 0,+1, 0]
-!      this%implicit%stc(5,:)=[ 0,-1, 0]
-!      this%implicit%stc(6,:)=[ 0, 0,+1]
-!      this%implicit%stc(7,:)=[ 0, 0,-1]
-!      
-!      ! Set the diagonal to 1 to make sure all cells participate in solver
-!      this%implicit%opr(1,:,:,:)=1.0_WP
-!      
-!      ! Initialize the implicit velocity solver
-!      call this%implicit%init(implicit_ils)
-!      
-!   end subroutine setup
    
    
    !> Add a boundary condition
@@ -1286,10 +1238,10 @@ contains
       integer :: i,j,k
       
       ! Check SR's first dimension
-      if (size(SR,dim=1).ne.6) call die('[incomp get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(SR,dim=1).ne.6) call die('[incomp get_strainrate] SR should be of size (1:6,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
-      do k=this%cfg%kmin_,this%cfg%kmax_
+	   do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                SR(1,i,j,k)=sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))
@@ -1304,7 +1256,7 @@ contains
       end do
       
       ! Allocate velocity gradient components
-      allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+	   allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dudz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dvdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dvdz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1312,7 +1264,7 @@ contains
       allocate(dwdy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       
       ! Calculate components of the velocity gradient at their natural locations with an extra cell for interpolation
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
+	   do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                dudy(i,j,k)=sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))
@@ -1326,7 +1278,7 @@ contains
       end do
       
       ! Interpolate off-diagonal components of the velocity gradient to the cell center and store strain rate
-      do k=this%cfg%kmin_,this%cfg%kmax_
+	   do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                SR(4,i,j,k)=0.125_WP*(sum(dudy(i:i+1,j:j+1,k    ))+sum(dvdx(i:i+1,j:j+1,k    )))
@@ -1337,7 +1289,7 @@ contains
       end do
       
       ! Apply a Neumann condition in non-periodic directions
-      if (.not.this%cfg%xper) then
+	   if (.not.this%cfg%xper) then
          if (this%cfg%iproc.eq.1)            SR(:,this%cfg%imin-1,:,:)=SR(:,this%cfg%imin,:,:)
          if (this%cfg%iproc.eq.this%cfg%npx) SR(:,this%cfg%imax+1,:,:)=SR(:,this%cfg%imax,:,:)
       end if
@@ -1351,7 +1303,7 @@ contains
       end if
       
       ! Ensure zero in walls
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
+	   do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                if (this%mask(i,j,k).eq.1) SR(:,i,j,k)=0.0_WP
@@ -1360,10 +1312,10 @@ contains
       end do
       
       ! Sync it
-      call this%cfg%sync(SR)
+	   call this%cfg%sync(SR)
       
       ! Deallocate velocity gradient storage
-      deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
+	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
       
    end subroutine get_strainrate
 
@@ -1379,10 +1331,10 @@ contains
       real(WP), dimension(:,:,:), allocatable :: dudy,dudz,dvdx,dvdz,dwdx,dwdy
       
       ! Check gradu's first two dimensions
-      if (size(gradu,dim=1).ne.3.or.size(gradu,dim=2).ne.3) call die('[incomp get_strainrate] gradu should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
+	   if (size(gradu,dim=1).ne.3.or.size(gradu,dim=2).ne.3) call die('[incomp get_strainrate] gradu should be of size (1:3,1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)')
       
       ! Compute dudx, dvdy, and dwdz first
-      do k=this%cfg%kmin_,this%cfg%kmax_
+	   do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                gradu(1,1,i,j,k)=sum(this%grdu_x(:,i,j,k)*this%U(i:i+1,j,k))
@@ -1393,7 +1345,7 @@ contains
       end do
       
       ! Allocate velocity gradient components
-      allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+	   allocate(dudy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dudz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dvdx(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       allocate(dvdz(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
@@ -1401,7 +1353,7 @@ contains
       allocate(dwdy(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       
       ! Calculate components of the velocity gradient at their natural locations with an extra cell for interpolation
-      do k=this%cfg%kmin_,this%cfg%kmax_+1
+	   do k=this%cfg%kmin_,this%cfg%kmax_+1
          do j=this%cfg%jmin_,this%cfg%jmax_+1
             do i=this%cfg%imin_,this%cfg%imax_+1
                dudy(i,j,k)=sum(this%grdu_y(:,i,j,k)*this%U(i,j-1:j,k))
@@ -1415,7 +1367,7 @@ contains
       end do
       
       ! Interpolate off-diagonal components of the velocity gradient to the cell center
-      do k=this%cfg%kmin_,this%cfg%kmax_
+	   do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                gradu(2,1,i,j,k)=0.25_WP*sum(dudy(i:i+1,j:j+1,k))
@@ -1429,7 +1381,7 @@ contains
       end do
       
       ! Apply a Neumann condition in non-periodic directions
-      if (.not.this%cfg%xper) then
+	   if (.not.this%cfg%xper) then
          if (this%cfg%iproc.eq.1)            gradu(:,:,this%cfg%imin-1,:,:)=gradu(:,:,this%cfg%imin,:,:)
          if (this%cfg%iproc.eq.this%cfg%npx) gradu(:,:,this%cfg%imax+1,:,:)=gradu(:,:,this%cfg%imax,:,:)
       end if
@@ -1443,7 +1395,7 @@ contains
       end if
       
       ! Ensure zero in walls
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
+	   do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
                if (this%mask(i,j,k).eq.1) gradu(:,:,i,j,k)=0.0_WP
@@ -1452,10 +1404,10 @@ contains
       end do
       
       ! Sync it
-      call this%cfg%sync(gradu)
+	   call this%cfg%sync(gradu)
       
       ! Deallocate velocity gradient storage
-      deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
+	   deallocate(dudy,dudz,dvdx,dvdz,dwdx,dwdy)
       
    end subroutine get_gradu
    
@@ -1471,6 +1423,7 @@ contains
       real(WP), optional :: cfl
       integer :: i,j,k,ierr
       real(WP) :: my_CFLc_x,my_CFLc_y,my_CFLc_z,my_CFLv_x,my_CFLv_y,my_CFLv_z
+      
       ! Set the CFLs to zero
       my_CFLc_x=0.0_WP; my_CFLc_y=0.0_WP; my_CFLc_z=0.0_WP
       my_CFLv_x=0.0_WP; my_CFLv_y=0.0_WP; my_CFLv_z=0.0_WP
@@ -1486,7 +1439,6 @@ contains
             end do
          end do
       end do
-      
       my_CFLc_x=my_CFLc_x*dt; my_CFLc_y=my_CFLc_y*dt; my_CFLc_z=my_CFLc_z*dt
       my_CFLv_x=my_CFLv_x*dt; my_CFLv_y=my_CFLv_y*dt; my_CFLv_z=my_CFLv_z*dt
       

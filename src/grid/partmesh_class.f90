@@ -12,11 +12,11 @@ module partmesh_class
       character(len=str_medium) :: name='PARTMESH'                      !< Name for the particle mesh
       integer :: n                                                      !< Number of particles
       real(WP), dimension(:,:), allocatable :: pos                      !< Position of the particles
-      integer :: nvar                                                   !< Number of particle variables stored
-      real(WP), dimension(:,:), allocatable :: var                      !< Particle variable storage
-      character(len=str_medium), dimension(:), allocatable :: varname   !< Name of particle variable fields
+      integer :: nvar                                                   !< Number of particle scalars stored
       integer :: nvec                                                   !< Number of particle vectors stored
-      real(WP), dimension(:,:,:), allocatable :: vec                    !< Particle vector data storage
+      real(WP), dimension(:,:), allocatable :: var                      !< Particle scalar storage
+      real(WP), dimension(:,:,:), allocatable :: vec                    !< Particle vector storage
+      character(len=str_medium), dimension(:), allocatable :: varname   !< Name of particle scalar fields
       character(len=str_medium), dimension(:), allocatable :: vecname   !< Name of particle vector fields
    contains
       procedure :: reset                                   !< Reset particle mesh to zero size
@@ -37,8 +37,7 @@ contains
    function constructor(nvar,nvec,name) result(self)
       implicit none
       type(partmesh) :: self
-      integer, intent(in) :: nvar
-      integer, intent(in) :: nvec
+      integer, intent(in) :: nvar,nvec
       character(len=*), optional :: name
       ! Set the name of the particle mesh
       if (present(name)) self%name=trim(adjustl(name))
@@ -48,7 +47,6 @@ contains
       self%nvar=nvar
       allocate(self%varname(self%nvar))
       self%varname='' !< Users will set the name themselves
-      ! Initialize additional vector data
       self%nvec=nvec
       allocate(self%vecname(self%nvec))
       self%vecname='' !< Users will set the name themselves
@@ -61,8 +59,8 @@ contains
       class(partmesh), intent(inout) :: this
       this%n=0
       if (allocated(this%pos)) deallocate(this%pos)
-      if (allocated(this%vec)) deallocate(this%vec)
       if (allocated(this%var)) deallocate(this%var)
+      if (allocated(this%vec)) deallocate(this%vec)
    end subroutine reset
    
    
