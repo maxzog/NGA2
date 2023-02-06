@@ -42,4 +42,5 @@ Ensight output period : 0.01
 
 # Restart config
 Restart sim : .false.
-Restart output period : 0.01
+Restart from : 1.00044E-02
+Restart output period : 0.001

@@ -48,7 +48,7 @@ module simulation
 
    !> Fluid and forcing parameters
    real(WP) :: visc,meanU,meanV,meanW
-   real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta,Re_dom,Re_max,Re_ratio
+   real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta,Re_max,Re_ratio
    real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE
    real(WP) :: meanvisc,Lx,tau_eddy,N,tau,dx_eta,ell_Lx
    real(WP) :: tauinf,EPS0,G,Gdtau,Gdtaui,dx,eps_ratio,tke_ratio,nondtime
@@ -173,7 +173,7 @@ contains
       ! Create an LES model
       create_sgs: block
          call param_read(tag='Use SGS model',val=use_sgs,default=.false.)
-         if (use_sgs) call param_read('SGS model type',sgs_type)
+         if (use_sgs) call param_read('SGS model type',sgs_type) ! currently doesn't do anything
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.17_WP
       end block create_sgs
@@ -300,7 +300,6 @@ contains
          
          URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
          Lambda = Lambda*URMS
-         Re_dom = fs%Umax*Lx/meanvisc
          Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
          Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
          eta = (meanvisc**3.0_WP/EPS)**0.25_WP
@@ -454,7 +453,6 @@ contains
          call hitfile%add_column(time%n,'Timestep number')
          call hitfile%add_column(time%t,'Time')
          call hitfile%add_column(Re_L,'Re_L')
-         call hitfile%add_column(Re_dom,'Re_dom')
          call hitfile%add_column(Re_lambda,'Re_lambda')
          call hitfile%add_column(meanvisc,'mean visc') 
          call hitfile%add_column(eta,'eta')
@@ -720,7 +718,6 @@ contains
 
                URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
                Lambda = Lambda*URMS
-               Re_dom = fs%Umax*Lx/meanvisc
                Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
                Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
                eta = (meanvisc**3.0_WP/EPS)**0.25_WP

@@ -91,7 +91,6 @@ contains
          call cpl%initialize()
       end if
       
-      
       ! Group1 does its initialization work here
       if (isInGrp1) then
          
@@ -104,7 +103,6 @@ contains
          call ens1%write_data(0.0_WP)
          
       end if
-      
       
       ! Group2 allocates the field to receive
       if (isInGrp2) then
@@ -123,43 +121,35 @@ contains
       !       Each interpolated variable must then be treated separately unless
       !       the coupler class source code is modified.
 
-      coupling_step1: block
+      coupling: block
          if (isInGrp1) call cpl%push(fsd%U)
          call cpl%transfer()
          if (isInGrp2) call cpl%pull(fsl%U)
          call ens2%add_scalar('U',fsl%U)
          call dfLES%pushvar(name='U' ,var=fsl%U   )
-      end block coupling_step1
 
-      coupling_step2: block
          if (isInGrp1) call cpl%push(fsd%V)
          call cpl%transfer()
          if (isInGrp2) call cpl%pull(fsl%V)
          call ens2%add_scalar('V',fsl%V)
          call dfLES%pushvar(name='V' ,var=fsl%V   )
-      end block coupling_step2
 
-      coupling_step3: block
          if (isInGrp1) call cpl%push(fsd%W)
          call cpl%transfer()
          if (isInGrp2) call cpl%pull(fsl%W)
          call ens2%add_scalar('W',fsl%W)
          call dfLES%pushvar(name='W' ,var=fsl%W   )
-      end block coupling_step3
 
-      coupling_step4: block
          if (isInGrp1) call cpl%push(fsd%P)
          call cpl%transfer()
          if (isInGrp2) call cpl%pull(fsl%P)
          call ens2%add_scalar('P',fsl%P)
          call dfLES%pushvar(name='P' ,var=fsl%P   )
-      end block coupling_step4
           
-      coupling_step5: block
          call dfDNS%pullval(name='dt' ,val=dt   )
          call dfLES%pushval(name='dt' ,val=dt   )
-      end block coupling_step5
-      
+      end block coupling
+
       ! Group2 outputs its received data
       if (isInGrp2) then
          call ens2%add_scalar('overlap',cpl%overlap)

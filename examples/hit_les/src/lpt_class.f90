@@ -34,6 +34,7 @@ module lpt_class
       real(WP), dimension(3) :: dW         !< Wiener increment
       real(WP), dimension(3) :: b_ij       !< Neighbor contributions to diffusion
       real(WP), dimension(3) :: uf         !< Stochastic flucutating fluid velocity seen
+      real(WP) :: corrsum                  !< Sum of correlation coefficient over neighbors
       real(WP) :: ncount                   !< Count of neighbors contributing to correlation 
       real(WP) :: a_crw                    !< OU drift
       real(WP) :: b_crw                    !< OU diffusion
@@ -45,7 +46,7 @@ module lpt_class
    end type part
    !> Number of blocks, block length, and block types in a particle
    integer, parameter                         :: part_nblock=3
-   integer           , dimension(part_nblock) :: part_lblock=[1,24,4]
+   integer           , dimension(part_nblock) :: part_lblock=[1,25,4]
    type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
    !> MPI_PART derived datatype and size
    type(MPI_Datatype) :: MPI_PART
@@ -554,16 +555,10 @@ contains
          
          ! Count particles and ghosts per cell
          do i=1,this%np_
-            ! this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-            !                 random_normal(m=0.0_WP,sd=rdt), &
-            !                 random_normal(m=0.0_WP,sd=rdt)]
             ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
             npic(ip,jp,kp)=npic(ip,jp,kp)+1
          end do
          do i=1,this%ng_
-            ! this%g(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-            !                 random_normal(m=0.0_WP,sd=rdt), &
-            !                 random_normal(m=0.0_WP,sd=rdt)]
             ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
             npic(ip,jp,kp)=npic(ip,jp,kp)+1
          end do
@@ -616,74 +611,68 @@ contains
                this%p(i)%b_crw = sig_sg*sqrt(2.0_WP*tau_crwi)
                
                if (spatial) then
-                  ! Spatial correlation block
+
                   correlate_neighbors: block
                      use mathtools, only: Pi,normalize
                      integer :: i2,ii,jj,kk,nn
-                     real(WP), dimension(3) :: r1,r2!,n12
+                     real(WP), dimension(3) :: r1,r2
                      real(WP) :: k_n,eta_n,lne,pilne2,rnv,r_influ,delta_n,corr,d12
+                        
+                     ! Store particle data
+                     r1=this%p(i)%pos
                      
-                     ! Loop over all local particles
-                     !do i=1,this%np_
-                        
-                        ! Store particle data
-                        r1=this%p(i)%pos
-
-                        ! Zero out neighbor contribution
-                        this%p(i)%b_ij = 0.0_WP
-                        this%p(i)%ncount = 0.0_WP
-                        
-                        ! Loop over nearest cells
-                        do kk=this%p(i)%ind(3)-no,this%p(i)%ind(3)+no
-                           do jj=this%p(i)%ind(2)-no,this%p(i)%ind(2)+no
-                              do ii=this%p(i)%ind(1)-no,this%p(i)%ind(1)+no
+                     ! Zero out neighbor contribution
+                     this%p(i)%b_ij    = 0.0_WP
+                     this%p(i)%ncount  = 0.0_WP
+                     this%p(i)%corrsum = 0.0_WP
+                     
+                     ! Loop over nearest cells
+                     do kk=this%p(i)%ind(3)-no,this%p(i)%ind(3)+no
+                        do jj=this%p(i)%ind(2)-no,this%p(i)%ind(2)+no
+                           do ii=this%p(i)%ind(1)-no,this%p(i)%ind(1)+no
                                  
-                                 ! Loop over particles in that cell
-                                 do nn=1,npic(ii,jj,kk)
+                              ! Loop over particles in that cell
+                              do nn=1,npic(ii,jj,kk)  
+                                 ! Get index of neighbor particle
+                                 i2=ipic(nn,ii,jj,kk)
                                     
-                                    ! Get index of neighbor particle
-                                    i2=ipic(nn,ii,jj,kk)
+                                 ! Get relevant data from correct storage
+                                 if (i2.gt.0) then
+                                    r2=this%p(i2)%pos
+                                 else if (i2.lt.0) then
+                                    i2=-i2
+                                    r2=this%g(i2)%pos
+                                 end if
                                     
-                                    ! Get relevant data from correct storage
-                                    if (i2.gt.0) then
-                                       r2=this%p(i2)%pos
-                                    else if (i2.lt.0) then
-                                       i2=-i2
-                                       r2=this%g(i2)%pos
-                                    end if
-                                    
-                                    ! Compute relative information
-                                    d12=norm2(r1-r2)
-                                    corr = corr_func(d12)
+                                 ! Compute relative information
+                                 d12=norm2(r1-r2)
+                                 corr = corr_func(d12)
 
-                                    this%p(i)%b_ij = this%p(i)%b_ij + corr*this%p(i2)%dW
-                                    this%p(i)%ncount = this%p(i)%ncount + 1.0_WP
-                                    
+                                 this%p(i)%corrsum = this%p(i)%corrsum + corr  
+                                 this%p(i)%b_ij = this%p(i)%b_ij + corr*this%p(i2)%dW
+                                 this%p(i)%ncount = this%p(i)%ncount + 1.0_WP  
                                  end do
                               end do
                            end do
                         end do
-                     !end do  
                   end block correlate_neighbors
                   
 
                   ! Increment OU process - 1st order
                   
-                  tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%b_ij(1)/sqrt(this%p(i)%ncount)! - &
+                  tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%b_ij(1)/this%p(i)%corrsum! - &
                         !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
-                  tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%b_ij(2)/sqrt(this%p(i)%ncount)! - &
+                  tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%b_ij(2)/this%p(i)%corrsum! - &
                         !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
-                  tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%b_ij(3)/sqrt(this%p(i)%ncount)! - &
+                  tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%b_ij(3)/this%p(i)%corrsum! - &
                         !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
                else
-
-               this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-                               random_normal(m=0.0_WP,sd=rdt), &
-                               random_normal(m=0.0_WP,sd=rdt)]
-               tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%dW(1)
-               tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%dW(2)
-               tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%dW(3)
-
+                  this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
+                                  random_normal(m=0.0_WP,sd=rdt), &
+                                  random_normal(m=0.0_WP,sd=rdt)]
+                  tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%dW(1)
+                  tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%dW(2)
+                  tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%dW(3)
                end if
             end if
             ! Correct with midpoint rule
@@ -753,6 +742,8 @@ contains
          select case(trim(this%corr_type))
          case('exp')
             rhoij = 1.0_WP
+         case('inferred')
+            rhoij = inferredcorr(r)
          case('linear')
             rhoij = 1.0_WP - 2.5_WP*r
          case default

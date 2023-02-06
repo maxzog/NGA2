@@ -48,12 +48,12 @@ module simulation
 
    !> Fluid and forcing parameters
    real(WP) :: visc,meanU,meanV,meanW
-   real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta,Re_dom,Re_max,Re_ratio
+   real(WP) :: Urms0,KE0,KE,EPS,Re_L,Re_lambda,eta,Re_max,Re_ratio
    real(WP) :: Uvar,Vvar,Wvar,TKE,URMS,ell,sgsTKE,stk,teta
    real(WP) :: meanvisc,Lx,tau_eddy,N,tau,dx_eta,ell_Lx
    real(WP) :: tauinf,EPS0,G,Gdtau,Gdtaui,dx,eps_ratio,tke_ratio,nondtime
    logical  :: linforce,use_sgs,maxRe
-   character(len=str_medium) :: sgs_type
+   integer  :: sgs_type
 
    !> Wallclock time for monitoring
    type :: timer
@@ -162,9 +162,6 @@ contains
          ps%maxlevel=10
          call param_read('Pressure iteration',ps%maxit)
          call param_read('Pressure tolerance',ps%rcvg)
-         call param_read('Linear forcing',linforce)
-         call param_read('Force to maximum Re_lambda',maxRe)
-         call param_read('Forcing constant (G)', G)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -186,10 +183,12 @@ contains
         use mathtools,only: Pi
         integer :: i,j,k,ierr
         real(WP) :: myKE
+
         ! Read in velocity rms and forcing time scale
         call param_read('Initial rms',Urms0)
-        call param_read('Eddy turnover time',tau_eddy)
-
+        call param_read('Linear forcing',linforce)
+        call param_read('Force to maximum Re_lambda',maxRe)
+        call param_read('Forcing constant (G)', G)
         call param_read('Lx', Lx)
         call param_read('nx', N)
         if (linforce) then
@@ -198,8 +197,8 @@ contains
                EPS0 = (visc/fs%rho)**3*(Pi*N/(1.5_WP*Lx))**4
                KE0 = 1.5_WP*(0.2_WP*Lx*EPS0)**(0.6667_WP)
            else
-               call param_read('Steady-state epsilon',EPS0)
                call param_read('Steady-state TKE',KE0)
+               EPS0 = 5.0_WP*(0.6667_WP*KE0)**1.5_WP / Lx  ! steady-state eps constrained by \ell=L/5
            end if
            tauinf = 2.0_WP*KE0/(3.0_WP*EPS0)
            Gdtau = G / tauinf
@@ -268,10 +267,8 @@ contains
          real(WP) :: mysgstke,myvisc,myKE
          integer :: i,j,k,ierr
          
-         sgsTKE = 0.0_WP 
-         mysgstke=0.0_WP
-         myvisc=0.0_WP
-         myKE=0.0_WP
+         sgsTKE=0.0_WP; mysgstke=0.0_WP
+         myvisc=0.0_WP; myKE=0.0_WP
 
          call fs%get_strainrate(SR=SR)
 
@@ -301,7 +298,6 @@ contains
          
          URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
          Lambda = Lambda*URMS
-         Re_dom = fs%Umax*Lx/meanvisc
          Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
          Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
          eta = (meanvisc**3.0_WP/EPS)**0.25_WP
@@ -457,7 +453,6 @@ contains
          call hitfile%add_column(time%n,'Timestep number')
          call hitfile%add_column(time%t,'Time')
          call hitfile%add_column(Re_L,'Re_L')
-         call hitfile%add_column(Re_dom,'Re_dom')
          call hitfile%add_column(Re_lambda,'Re_lambda')
          call hitfile%add_column(meanvisc,'mean visc') 
          call hitfile%add_column(eta,'eta')
@@ -469,7 +464,7 @@ contains
          call hitfile%add_column(ell,'Integral lengthscale')
          call hitfile%write()
          ! Create hit "convergence" monitor
-         ssfile=monitor(fs%cfg%amRoot,'ss')
+         ssfile=monitor(fs%cfg%amRoot,'convergence')
          call ssfile%add_column(time%n,'Timestep number')
          call ssfile%add_column(time%t,'Time')
          call ssfile%add_column(nondtime,'Time/t_int')
@@ -564,7 +559,7 @@ contains
             call fs%get_strainrate(SR=SR)
             call fs%get_gradu(gradu=gradu)
             resU=fs%rho
-            call sgs%get_visc(type=off,rho=resU,gradu=gradu)
+            call sgs%get_visc(type=sgs_type,rho=resU,gradu=gradu)
             where (sgs%visc.lt.-fs%visc)
                sgs%visc=-fs%visc
             end where
@@ -723,7 +718,6 @@ contains
 
                URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
                Lambda = Lambda*URMS
-               Re_dom = fs%Umax*Lx/meanvisc
                Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
                Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
                eta = (meanvisc**3.0_WP/EPS)**0.25_WP
