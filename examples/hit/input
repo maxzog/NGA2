@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 1 4
+Partition :	1 1 1
 
 # Mesh definition
 Lx :	1.0
@@ -42,5 +42,5 @@ Ensight output period : 0.01
 
 # Restart config
 Restart sim : .false.
-Restart from : 1.00044E-02
+# Restart from : 1.00044E-02
 Restart output period : 0.001

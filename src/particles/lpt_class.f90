@@ -576,7 +576,7 @@ contains
     end block collision_force
 
   end subroutine collide
-
+  
 
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
@@ -606,7 +606,7 @@ contains
     integer :: i,j,k,ierr
     real(WP) :: mydt,dt_done,deng,Ip
     real(WP), dimension(3) :: acc,torque,dmom
-    real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo) :: sx,sy,sz
+    real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: sx,sy,sz
     type(part) :: myp,pold
 
     ! Zero out source term arrays
@@ -617,19 +617,19 @@ contains
     
     ! Get fluid stress
     if (present(stress_x)) then
-       sx=stress_x
+      sx=stress_x
     else
-       sx=0.0_WP
+      sx=0.0_WP
     end if
     if (present(stress_y)) then
-       sy=stress_y
+      sy=stress_y
     else
-       sy=0.0_WP
+      sy=0.0_WP
     end if
     if (present(stress_z)) then
-       sz=stress_z
+      sz=stress_z
     else
-       sz=0.0_WP
+      sz=0.0_WP
     end if
 
     ! Zero out number of particles removed
@@ -837,7 +837,7 @@ contains
     ! Transfer particle volume
     do i=1,this%np_
        ! Skip inactive particle
-       if (this%p(i)%flag.eq.1 .or. this%p(i)%id.eq.0) cycle
+       if (this%p(i)%flag.eq.1.or.this%p(i)%id.eq.0) cycle
        ! Transfer particle volume
        Vp=Pi/6.0_WP*this%p(i)%d**3
        call this%cfg%set_scalar(Sp=Vp,pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%VF,bc='n')
@@ -1260,7 +1260,7 @@ contains
           end do
        end do
     end do
-    call MPI_ALLREDUCE(this%VFmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFmean=buf/this%cfg%vol_total
+    call MPI_ALLREDUCE(this%VFmean,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFmean=buf/this%cfg%fluid_vol
     call MPI_ALLREDUCE(this%VFmax ,buf,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); this%VFmax =buf
     call MPI_ALLREDUCE(this%VFmin ,buf,1,MPI_REAL_WP,MPI_MIN,this%cfg%comm,ierr); this%VFmin =buf
 
@@ -1273,7 +1273,7 @@ contains
           end do
        end do
     end do
-    call MPI_ALLREDUCE(this%VFvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFvar=buf/this%cfg%vol_total
+    call MPI_ALLREDUCE(this%VFvar,buf,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); this%VFvar=buf/this%cfg%fluid_vol
 
   end subroutine get_max
 
