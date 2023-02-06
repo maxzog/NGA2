@@ -1,15 +1,15 @@
 # First mesh definition
-1 Partition :       1 1 4
-1 Number of cells : 64 64 64
-1 Domain size :     1 1 1
+1 Partition :       1 8 6
+1 Number of cells : 128 128 128
+1 Domain size :     1.0 1.0 1.0
 1 Domain center :   0.5 0.5 0.5
 
 # Second mesh definition
-2 Partition :       1 1 4
-2 Number of cells : 16 16 16
-2 Domain size :     1 1 1
+2 Partition :       1 8 6
+2 Number of cells : 32 32 32
+2 Domain size :     1.0 1.0 1.0
 2 Domain center :   0.5 0.5 0.5
 
 # i/o 
-DNS read directory  : ./dns/
-LES write directory : ./les/
+File to be interpolated  : ./dns/data
+Output file name  : ./les/les32

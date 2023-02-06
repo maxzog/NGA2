@@ -23,15 +23,15 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-LAPACK_DIR= /usr/local/Cellar/lapack/3.11
-HYPRE_DIR = /Users/maxzog/builds/hypre/src/hypre
-FFTW_DIR  = /usr/local/Cellar/fftw/3.3.10_1
+LAPACK_DIR= /usr/lapack
+HYPRE_DIR = /opt/libs/hypre/
+FFTW_DIR  = /usr/
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := solver particles constant_density data core config grid libraries subgrid
+Bdirs   := particles core subgrid constant_density data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 
