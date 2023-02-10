@@ -288,7 +288,7 @@ contains
      implicit none
      class(sgsmodel), intent(inout) :: this
      integer, intent(in) :: type !< Model type
-     real(WP), intent(in) :: dt !< dt since the last call to the model
+     real(WP), optional, intent(in) :: dt !< dt since the last call to the model
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: rho !< Density including all ghosts
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: Ui  !< Interpolated velocities including all ghosts
      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in), optional :: Vi  !< Interpolated velocities including all ghosts
@@ -437,7 +437,7 @@ contains
                else
                   Cs=0.0_WP
                end if
-               Cs = this%Cs_ref
+               ! Cs = this%Cs_ref
                this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*Cs*this%delta(i,j,k)**2
             end do
          end do
@@ -468,7 +468,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*this%Cs_ref*this%delta(i,j,k)**2
+               this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*(this%Cs_ref*this%delta(i,j,k))**2
             end do
          end do
       end do
