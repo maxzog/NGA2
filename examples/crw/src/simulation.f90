@@ -327,8 +327,6 @@ contains
          character(len=str_medium) :: timestamp
          ! Create solver
          lp=crw(cfg=cfg,name='CRW')
-         ! Get drag model from the inpit
-         call param_read('Drag model',lp%drag_model,default='Schiller-Naumann')
          ! Get particle density from the input
          call param_read('Particle density',lp%rho)
          ! Get particle diameter from the input
@@ -358,17 +356,15 @@ contains
                   ! Give zero velocity
                   lp%p(i)%vel=0.0_WP
                   ! OU
-                  lp%p(i)%uf=0.0_WP
+                  lp%p(i)%us=0.0_WP
                   if (use_crw) then
-                     ! lp%p(i)%uf= [random_normal(m=0.0_WP,sd=0.1_WP),& 
+                     ! lp%p(i)%us= [random_normal(m=0.0_WP,sd=0.1_WP),& 
                      !              random_normal(m=0.0_WP,sd=0.1_WP),&    
                      !              random_normal(m=0.0_WP,sd=0.1_WP)] 
-                     lp%p(i)%uf = 0.0_WP
+                     lp%p(i)%us = 0.0_WP
                   end if
                   ! Give zero dt
                   lp%p(i)%dt=0.0_WP
-                  lp%p(i)%a_crw=0.0_WP
-                  lp%p(i)%b_crw=0.0_WP
                   ! Locate the particle on the mesh
                   lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
                   ! Activate the particle
@@ -396,7 +392,7 @@ contains
             pmesh%var(1,i) = lp%p(i)%id
             pmesh%vec(:,1,i) = lp%p(i)%vel
             pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
-            pmesh%vec(:,3,i) = lp%p(i)%uf 
+            pmesh%vec(:,3,i) = lp%p(i)%us 
          end do
       end block create_pmesh
       
@@ -549,7 +545,7 @@ contains
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,use_crw=use_crw,sgs=sgs)
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs=sgs)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Remember old velocity
@@ -748,7 +744,7 @@ contains
                pmesh%var(1,ii) = lp%p(ii)%id
                pmesh%vec(:,1,ii) = lp%p(ii)%vel
                pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=Ui,V=Vi,W=Wi)
-               pmesh%vec(:,3,ii) = lp%p(ii)%uf
+               pmesh%vec(:,3,ii) = lp%p(ii)%us
             end do
             call ens_out%write_data(time%t)
          end if

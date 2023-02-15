@@ -78,6 +78,7 @@ module crw_class
 
      ! Solver parameters
      real(WP) :: nstep=1                                 !< Number of substeps (default=1)
+     integer  :: corr_type                               !< Correlation type (spatial)
 
      ! Monitoring info
      real(WP) :: VFmin,VFmax,VFmean,VFvar                !< Volume fraction info
@@ -98,6 +99,7 @@ module crw_class
 
    contains
      procedure :: update_partmesh                        !< Update a partmesh object using current particles
+     procedure :: get_OU_coefficients                    !< ... gets OU coefficients
      procedure :: update_dW                              !< Updates random values assigned to particles
      procedure :: advance                                !< Step forward the particle ODEs
      procedure :: get_rhs                                !< Compute rhs of particle odes
@@ -277,7 +279,8 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     logical, intent(in), optional :: spatial
     integer :: i,j,k,ierr,no
-    real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw
+    real(WP), dimension(3) :: b_ij
+    real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum
     real(WP) :: tmp1,tmp2,tmp3
     real(WP), dimension(3) :: acc,dmom
     integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
@@ -372,8 +375,8 @@ contains
                r1=this%p(i)%pos
 
                ! Zero out neighbor contribution
-               this%p(i)%b_ij    = 0.0_WP
-               this%p(i)%corrsum = 0.0_WP
+               b_ij    = 0.0_WP
+               corrsum = 0.0_WP
 
                ! Loop over nearest cells
                do kk=this%p(i)%ind(3)-no,this%p(i)%ind(3)+no
@@ -397,8 +400,8 @@ contains
                            d12=norm2(r1-r2)
                            corr = corr_func(d12)
 
-                           this%p(i)%corrsum = this%p(i)%corrsum + corr  
-                           this%p(i)%b_ij = this%p(i)%b_ij + corr*this%p(i2)%dW
+                           corrsum = corrsum + corr  
+                           b_ij = b_ij + corr*this%p(i2)%dW
                         end do
                      end do
                   end do
@@ -406,11 +409,11 @@ contains
              end block correlate_neighbors
 
              ! Increment OU process - 1st order
-             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*this%p(i)%b_ij(1)/this%p(i)%corrsum! - &
+             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*b_ij(1)/corrsum! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
-             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*this%p(i)%b_ij(2)/this%p(i)%corrsum! - &
+             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*b_ij(2)/corrsum! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
-             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*this%p(i)%b_ij(3)/this%p(i)%corrsum! - &
+             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*b_ij(3)/corrsum! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
           else
              this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt),random_normal(m=0.0_WP,sd=rdt),random_normal(m=0.0_WP,sd=rdt)]
@@ -478,12 +481,12 @@ contains
     function corr_func(r) result(rhoij)
       real(WP) :: r, rhoij
 
-      select case(trim(this%corr_type))
-      case('exp')
+      select case(this%corr_type)
+      case(1)
          rhoij = 1.0_WP
          ! case('inferred')
          !    rhoij = inferredcorr(r)
-      case('linear')
+      case(2)
          rhoij = 1.0_WP - 2.5_WP*r
       case default
          rhoij = 1.0_WP
@@ -528,14 +531,14 @@ contains
     ! Particle response time
     tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
     ! Return acceleration and optimal timestep size
-    acc=(fvel-p%vel)/tau+fstress/this%rho
+    acc=(fvel-p%vel)/tau !+fstress/this%rho
     opt_dt=tau/real(this%nstep,WP)
 
   end subroutine get_rhs
 
 
   !> Calculate drift and diffusion coefficients
-  subroutine get_OU_coefficient(thisrho,visc,p,drift,diffusion)
+  subroutine get_OU_coefficients(this,rho,visc,p,drift,diffusion)
     implicit none
     class(crw), intent(inout) :: this
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -543,6 +546,7 @@ contains
     type(part), intent(in) :: p
     real(WP), intent(out) :: drift,diffusion
     real(WP) :: fvisc,frho,tke,sig_sg,tau_crwi
+    real(WP) :: delta
 
     ! Interpolate the fluid phase viscosity and density to the particle location
     fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
@@ -557,7 +561,7 @@ contains
 
     drift = tau_crwi
     diffusion = sig_sg*sqrt(2.0_WP*tau_crwi)
-  end subroutine get_drift_diffusion
+  end subroutine get_OU_coefficients
 
 
   !> Update particle volume fraction using our current particles
@@ -712,7 +716,6 @@ contains
 
     ! Return the maximum convective CFL
     cfl=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
-    this%CFL_col=0.0_WP
 
   end subroutine get_cfl
 
