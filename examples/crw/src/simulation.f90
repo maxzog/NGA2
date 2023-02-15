@@ -5,7 +5,7 @@ module simulation
    !use hypre_str_class,   only: hypre_str
    use fourier3d_class,   only: fourier3d
    use incomp_class,      only: incomp
-   use lpt_class,         only: lpt
+   use crw_class,         only: crw
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use partmesh_class,    only: partmesh
@@ -22,7 +22,7 @@ module simulation
    type(fourier3d),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
-   type(lpt),         public :: lp
+   type(crw),         public :: lp
    type(sgsmodel),    public :: sgs
    
    !> Ensight postprocessing
@@ -37,12 +37,11 @@ module simulation
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,hitfile,lptfile,sgsfile,tfile,ssfile
-   
    public :: simulation_init,simulation_run,simulation_final
    
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,SR2
    real(WP), dimension(:,:,:,:), allocatable :: SR
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
    
@@ -57,7 +56,7 @@ module simulation
    integer  :: sgs_type
 
    !> For monitoring
-   real(WP) :: EPS,sgsEPSp
+   real(WP) :: EPS,sgsEPSp,sgsTKEalt
    real(WP) :: Re_L,Re_lambda
    real(WP) :: eta,ell
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
@@ -87,6 +86,7 @@ contains
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(SR2 (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
@@ -293,6 +293,7 @@ contains
                end do
             end do
          end do
+         sgsTKEalt=0.0_WP
 
          call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
 
@@ -325,7 +326,7 @@ contains
          integer :: i,np
          character(len=str_medium) :: timestamp
          ! Create solver
-         lp=lpt(cfg=cfg,name='LPT')
+         lp=crw(cfg=cfg,name='CRW')
          ! Get drag model from the inpit
          call param_read('Drag model',lp%drag_model,default='Schiller-Naumann')
          ! Get particle density from the input
@@ -359,9 +360,10 @@ contains
                   ! OU
                   lp%p(i)%uf=0.0_WP
                   if (use_crw) then
-                     lp%p(i)%uf= [random_normal(m=0.0_WP,sd=0.1_WP),& 
-                                  random_normal(m=0.0_WP,sd=0.1_WP),&    
-                                  random_normal(m=0.0_WP,sd=0.1_WP)] 
+                     ! lp%p(i)%uf= [random_normal(m=0.0_WP,sd=0.1_WP),& 
+                     !              random_normal(m=0.0_WP,sd=0.1_WP),&    
+                     !              random_normal(m=0.0_WP,sd=0.1_WP)] 
+                     lp%p(i)%uf = 0.0_WP
                   end if
                   ! Give zero dt
                   lp%p(i)%dt=0.0_WP
@@ -498,6 +500,7 @@ contains
          call sgsfile%add_column(sgs%max_visc,'Max eddy visc')
          call sgsfile%add_column(sgsEPSp,'SGSEPS')
          call sgsfile%add_column(sgsTKE,'sgsTKE')
+         call sgsfile%add_column(sgsTKEalt,'sgsTKEalt')
          call sgsfile%write()
          ! Create timing monitor
          tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
@@ -678,22 +681,25 @@ contains
          compute_stats: block 
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
             use parallel, only: MPI_REAL_WP
-            real(WP) :: mysgstke,myvisc,myTKE,myEPS
-            real(WP) :: mysgsEPSp,myEPSp
+            real(WP) :: mysgsTKE,myvisc,myTKE,myEPS
+            real(WP) :: mysgsEPSp,myEPSp,mysgsTKEalt
             integer :: i,j,k,ierr
 
             myvisc=0.0_WP; myTKE=0.0_WP; myEPS=0.0_WP
-            sgsTKE=0.0_WP; mysgstke=0.0_WP; 
+            sgsTKE=0.0_WP; mysgsTKE=0.0_WP; mysgsTKEalt=0.0_WP; 
             mysgsEPSp=0.0_WP
 
             call fs%get_strainrate(SR=SR)
             call fs%get_gradu(gradu=gradu)
+
+            SR2=SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)
 
             do k=fs%cfg%kmin_,fs%cfg%kmax_
                do j=fs%cfg%jmin_,fs%cfg%jmax_
                   do i=fs%cfg%imin_,fs%cfg%imax_
                      ! LES stats
                      mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
+                     mysgsTKEalt = mysgsTKEalt + fs%cfg%vol(i,j,k)*0.0826_WP*sgs%delta(i,j,k)**2*2.0_WP*SR2(i,j,k)
                      myvisc = myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
 
                      ! Resolved TKE
@@ -703,10 +709,10 @@ contains
                      myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
 
                      ! Pseudo-dissipation (sgs, resolved, total)
-                     mysgsEPSp=mysgsEPSp+fs%cfg%vol(i,j,k)*sgs%visc(i,j,k)*(                   &
-                                 gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
-                                 gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
-                                 gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
+                     mysgsEPSp=mysgsEPSp+fs%cfg%vol(i,j,k)*sgs%visc(i,j,k)*(                 &
+                           &   gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
+                           &   gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
+                           &   gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
                   end do
                end do
             end do
@@ -714,6 +720,7 @@ contains
             call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
 
             call MPI_ALLREDUCE(mysgstke,sgsTKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKE=sgsTKE/fs%cfg%vol_total
+            call MPI_ALLREDUCE(mysgsTKEalt,sgsTKEalt,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKEalt=sgsTKEalt/fs%cfg%vol_total
             call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE=TKE/fs%cfg%vol_total
 
             call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr        ); EPS=EPS/fs%cfg%vol_total
@@ -813,7 +820,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu,SR2)
       
    end subroutine simulation_final
    

@@ -1,4 +1,4 @@
-!> Stochastic Lagrangian particle solver class:
+!> Stochastic Lagrangian particle solver class based on continuous random walk:
 !> Provides support for stochastic Lagrangian subgrid-scale models
 module crw_class
   use precision,      only: WP
@@ -32,11 +32,7 @@ module crw_class
      real(WP), dimension(3) :: pos        !< Particle center coordinates
      real(WP), dimension(3) :: vel        !< Velocity of particle
      real(WP), dimension(3) :: dW         !< Wiener increment
-     real(WP), dimension(3) :: b_ij       !< Neighbor contributions to diffusion
-     real(WP), dimension(3) :: uf         !< Stochastic flucutating fluid velocity seen
-     real(WP) :: corrsum                  !< Sum of correlation coefficient over neighbors
-     real(WP) :: a_crw                    !< OU drift
-     real(WP) :: b_crw                    !< OU diffusion
+     real(WP), dimension(3) :: us         !< Stochastic flucutating fluid velocity seen
      real(WP) :: dt                       !< Time step size for the particle
      !> MPI_INTEGER data
      integer , dimension(3) :: ind        !< Index of cell containing particle center
@@ -44,7 +40,7 @@ module crw_class
   end type part
   !> Number of blocks, block length, and block types in a particle
   integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[1,20,4]
+  integer           , dimension(part_nblock) :: part_lblock=[1,14,4]
   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART
@@ -72,7 +68,7 @@ module crw_class
      type(part), dimension(:), allocatable :: g          !< Array of ghosts of type part
 
      ! CFL numbers
-     real(WP) :: CFLp_x,CFLp_y,CFLp_z,CFL_col            !< CFL numbers
+     real(WP) :: CFLp_x,CFLp_y,CFLp_z                    !< CFL numbers
 
      ! Particle density
      real(WP) :: rho                                     !< Density of particle
@@ -82,9 +78,6 @@ module crw_class
 
      ! Solver parameters
      real(WP) :: nstep=1                                 !< Number of substeps (default=1)
-     character(len=str_medium), public :: drag_model     !< Drag model
-     character(len=str_medium), public :: corr_type      !< Spatial correlation function for OU process
-     logical :: use_lift=.false.                         !< Compute lift force on particles
 
      ! Monitoring info
      real(WP) :: VFmin,VFmax,VFmean,VFvar                !< Volume fraction info
@@ -165,12 +158,6 @@ contains
     ! Solve implicitly by default
     self%implicit_filter=.true.
 
-    ! Set default drag
-    self%drag_model='Schiller-Naumann'
-
-    ! Zero friction by default
-    self%mu_f=0.0_WP
-
     ! Allocate finite volume divergence operators
     allocate(self%div_x(0:+1,self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_)) !< Cell-centered
     allocate(self%div_y(0:+1,self%cfg%imin_:self%cfg%imax_,self%cfg%jmin_:self%cfg%jmax_,self%cfg%kmin_:self%cfg%kmax_)) !< Cell-centered
@@ -239,81 +226,6 @@ contains
        self%grd_z=0.0_WP
     end if
 
-    ! Generate a wall distance/norm function
-    allocate(self%Wdist(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
-    allocate(self%Wnorm(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
-    ! First pass to set correct sign
-    do k=self%cfg%kmino_,self%cfg%kmaxo_
-       do j=self%cfg%jmino_,self%cfg%jmaxo_
-          do i=self%cfg%imino_,self%cfg%imaxo_
-             if (self%cfg%VF(i,j,k).eq.0.0_WP) then
-                self%Wdist(i,j,k)=-sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
-             else
-                self%Wdist(i,j,k)=+sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
-             end if
-             self%Wnorm(:,i,j,k)=0.0_WP
-          end do
-       end do
-    end do
-    ! Second pass to compute local distance
-    do k=self%cfg%kmino_,self%cfg%kmaxo_
-       do j=self%cfg%jmino_,self%cfg%jmaxo_
-          do i=self%cfg%imino_+1,self%cfg%imaxo_
-             if (self%Wdist(i,j,k)*self%Wdist(i-1,j,k).lt.0.0_WP) then
-                ! There is a wall at x(i)
-                if (abs(self%cfg%xm(i  )-self%cfg%x(i)).lt.abs(self%Wdist(i  ,j,k))) then
-                   self%Wdist(i  ,j,k)=sign(self%cfg%xm(i  )-self%cfg%x(i),self%Wdist(i  ,j,k))
-                   self%Wnorm(:,i  ,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-1,j,k),0.0_WP,0.0_WP]
-                end if
-                if (abs(self%cfg%xm(i-1)-self%cfg%x(i)).lt.abs(self%Wdist(i-1,j,k))) then
-                   self%Wdist(i-1,j,k)=sign(self%cfg%xm(i-1)-self%cfg%x(i),self%Wdist(i-1,j,k))
-                   self%Wnorm(:,i-1,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-1,j,k),0.0_WP,0.0_WP]
-                end if
-             end if
-          end do
-       end do
-    end do
-    call self%cfg%sync(self%Wdist)
-    call self%cfg%sync(self%Wnorm)
-    do k=self%cfg%kmino_,self%cfg%kmaxo_
-       do j=self%cfg%jmino_+1,self%cfg%jmaxo_
-          do i=self%cfg%imino_,self%cfg%imaxo_
-             if (self%Wdist(i,j,k)*self%Wdist(i,j-1,k).lt.0.0_WP) then
-                ! There is a wall at y(j)
-                if (abs(self%cfg%ym(j  )-self%cfg%y(j)).lt.abs(self%Wdist(i,j  ,k))) then
-                   self%Wdist(i,j  ,k)=sign(self%cfg%ym(j  )-self%cfg%y(j),self%Wdist(i,j  ,k))
-                   self%Wnorm(:,i,j  ,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-1,k),0.0_WP]
-                end if
-                if (abs(self%cfg%ym(j-1)-self%cfg%y(j)).lt.abs(self%Wdist(i,j-1,k))) then
-                   self%Wdist(i,j-1,k)=sign(self%cfg%ym(j-1)-self%cfg%y(j),self%Wdist(i,j-1,k))
-                   self%Wnorm(:,i,j-1,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-1,k),0.0_WP]
-                end if
-             end if
-          end do
-       end do
-    end do
-    call self%cfg%sync(self%Wdist)
-    call self%cfg%sync(self%Wnorm)
-    do k=self%cfg%kmino_+1,self%cfg%kmaxo_
-       do j=self%cfg%jmino_,self%cfg%jmaxo_
-          do i=self%cfg%imino_,self%cfg%imaxo_
-             if (self%Wdist(i,j,k)*self%Wdist(i,j,k-1).lt.0.0_WP) then
-                ! There is a wall at z(k)
-                if (abs(self%cfg%zm(k  )-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k  ))) then
-                   self%Wdist(i,j,k  )=sign(self%cfg%zm(k  )-self%cfg%z(k),self%Wdist(i,j,k  ))
-                   self%Wnorm(:,i,j,k  )=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-1)]
-                end if
-                if (abs(self%cfg%zm(k-1)-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k-1))) then
-                   self%Wdist(i,j,k-1)=sign(self%cfg%zm(k-1)-self%cfg%z(k),self%Wdist(i,j,k-1))
-                   self%Wnorm(:,i,j,k-1)=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-1)]
-                end if
-             end if
-          end do
-       end do
-    end do
-    call self%cfg%sync(self%Wdist)
-    call self%cfg%sync(self%Wnorm)
-
     ! Log/screen output
     logging: block
       use, intrinsic :: iso_fortran_env, only: output_unit
@@ -332,24 +244,24 @@ contains
 
   !> Assigns new random numbers (dim 3) to particles from N~(0,sqrt(dt))
   subroutine update_dW(this, dt)
-   use random, only: random_normal
-   implicit none
-   class(crw), intent(inout) :: this
-   real(WP), intent(in) :: dt
-   real(WP) :: rdt
-   integer :: i
-   rdt = sqrt(dt)
-   do i=1,this%np_
-      this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-                      random_normal(m=0.0_WP,sd=rdt), &
-                      random_normal(m=0.0_WP,sd=rdt)]
-   end do
+    use random, only: random_normal
+    implicit none
+    class(crw), intent(inout) :: this
+    real(WP), intent(in) :: dt
+    real(WP) :: rdt
+    integer :: i
+    rdt = sqrt(dt)
+    do i=1,this%np_
+       this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
+            random_normal(m=0.0_WP,sd=rdt), &
+            random_normal(m=0.0_WP,sd=rdt)]
+    end do
   end subroutine update_dW
-  
+
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,stress_x,stress_y,stress_z,vortx,vorty,vortz,T,srcU,srcV,srcW,srcE,use_crw,sgs)
+  subroutine advance(this,dt,U,V,W,rho,visc,spatial,sgs)
     use mpi_f08,        only : MPI_SUM,MPI_INTEGER
     use mathtools,      only: Pi
     use sgsmodel_class, only: sgsmodel
@@ -363,73 +275,40 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortx  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vorty  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: vortz  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcU   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    logical, intent(in), optional :: spatial
     integer :: i,j,k,ierr,no
-    real(WP) :: mydt,dt_done,deng,Ip,rdt,tke,sig_sg,tau_crwi
+    real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw
     real(WP) :: tmp1,tmp2,tmp3
-    real(WP), dimension(3) :: acc,torque,dmom
-    integer :: iii,jjj,kkk  
+    real(WP), dimension(3) :: acc,dmom
     integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
     integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
-    real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: sx,sy,sz
-    type(part) :: myp,pold
-    logical :: spatial
-    logical, intent(in), optional :: use_crw
+    type(part) :: pold
+    logical :: spatial_
 
-    rdt = sqrt(dt)
-    spatial = .true.
-
-    ! Zero out source term arrays
-    if (present(srcU)) srcU=0.0_WP
-    if (present(srcV)) srcV=0.0_WP
-    if (present(srcW)) srcW=0.0_WP
-    if (present(srcE)) srcE=0.0_WP
+    spatial_=.false.
+    if (present(spatial)) spatial_=spatial
+    spatial_ = .false.
     
-    ! Get fluid stress
-    if (present(stress_x)) then
-      sx=stress_x
-    else
-      sx=0.0_WP
-    end if
-    if (present(stress_y)) then
-      sy=stress_y
-    else
-      sy=0.0_WP
-    end if
-    if (present(stress_z)) then
-      sz=stress_z
-    else
-      sz=0.0_WP
-    end if
+    rdt = sqrt(dt)
 
     ! Zero out number of particles removed
     this%np_out=0
 
-    if (spatial) then
-      no = 2
-      
-      ! Share particles across overlap
-      call this%share(no)
-      
-      ! We can now assemble particle-in-cell information
-      pic_prep: block
+    if (spatial_) then
+
+       ! Share particles across overlap
+       no = max(2,this%cfg%no)
+       call this%share(no)
+
+       ! We can now assemble particle-in-cell information
+       pic_prep: block
          use mpi_f08
-         integer :: i,ip,jp,kp,ierr
+         integer :: ip,jp,kp
          integer :: mymax_npic,max_npic
-         
+
          ! Allocate number of particle in cell
          allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
-         
+
          ! Count particles and ghosts per cell
          do i=1,this%np_
             ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
@@ -439,13 +318,13 @@ contains
             ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
             npic(ip,jp,kp)=npic(ip,jp,kp)+1
          end do
-         
+
          ! Get maximum number of particle in cell
          mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
-         
+
          ! Allocate pic map
          allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
-         
+
          ! Assemble pic map
          npic=0
          do i=1,this%np_
@@ -458,148 +337,113 @@ contains
             npic(ip,jp,kp)=npic(ip,jp,kp)+1
             ipic(npic(ip,jp,kp),ip,jp,kp)=-i
          end do
-         
-      end block pic_prep
+
+       end block pic_prep
+
+       call this%update_dW(dt=dt)
     end if
-    if (use_crw) call this%update_dW(dt=dt)
+
     ! Advance the equations
     do i=1,this%np_
        ! Avoid particles with id=0
        if (this%p(i)%id.eq.0) cycle
-       ! Create local copy of particle
-       myp=this%p(i)
        ! Time-integrate until dt_done=dt
        dt_done=0.0_WP
        do while (dt_done.lt.dt)
           ! Decide the timestep size
-          mydt=min(myp%dt,dt-dt_done)
+          mydt=min(this%p(i)%dt,dt-dt_done)
           ! Remember the particle
-          pold=myp
+          pold=this%p(i)
           ! Advance with Euler prediction
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,opt_dt=myp%dt,use_crw=use_crw)
-          !if (this%use_lift.and.present(vortx).and.present(vorty).and.present(vortz)) call this%get_lift(vortx,vorty,vortz,acc=acc)
-          myp%pos=pold%pos+0.5_WP*mydt*myp%vel
-          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
-          if (use_crw) then
-            iii = this%p(i)%ind(1)
-            jjj = this%p(i)%ind(2)
-            kkk = this%p(i)%ind(3)
-            tke = 0.1_WP !get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
-            
-            sig_sg = sqrt(0.6666_WP*tke)
-            tau_crwi = sig_sg/sgs%delta(iii,jjj,kkk)/C_poz
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+          this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
+          this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
+          ! Stochastic update
+          call this%get_OU_coefficients(rho=rho,visc=visc,p=this%p(i),drift=a_crw,diffusion=b_crw)
 
-            this%p(i)%a_crw = tau_crwi
-            this%p(i)%b_crw = sig_sg*sqrt(2.0_WP*tau_crwi)
-            
-            if (spatial) then
-               correlate_neighbors: block
-                  use mathtools, only: Pi,normalize
-                  integer :: i2,ii,jj,kk,nn
-                  real(WP), dimension(3) :: r1,r2
-                  real(WP) :: k_n,eta_n,lne,pilne2,rnv,r_influ,delta_n,corr,d12
-                     
-                  ! Store particle data
-                  r1=this%p(i)%pos
-                  
-                  ! Zero out neighbor contribution
-                  this%p(i)%b_ij    = 0.0_WP
-                  this%p(i)%corrsum = 0.0_WP
-                  
-                  ! Loop over nearest cells
-                  do kk=this%p(i)%ind(3)-no,this%p(i)%ind(3)+no
-                     do jj=this%p(i)%ind(2)-no,this%p(i)%ind(2)+no
-                        do ii=this%p(i)%ind(1)-no,this%p(i)%ind(1)+no
-                              
-                           ! Loop over particles in that cell
-                           do nn=1,npic(ii,jj,kk)  
-                              ! Get index of neighbor particle
-                              i2=ipic(nn,ii,jj,kk)
-                                 
-                              ! Get relevant data from correct storage
-                              if (i2.gt.0) then
-                                 r2=this%p(i2)%pos
-                              else if (i2.lt.0) then
-                                 i2=-i2
-                                 r2=this%g(i2)%pos
-                              end if
-                                 
-                              ! Compute relative information
-                              d12=norm2(r1-r2)
-                              corr = corr_func(d12)
+          if (spatial_) then
+             correlate_neighbors: block
+               use mathtools, only: Pi,normalize
+               integer :: i2,ii,jj,kk,nn
+               real(WP), dimension(3) :: r1,r2
+               real(WP) :: k_n,eta_n,lne,pilne2,rnv,r_influ,delta_n,corr,d12
 
-                              this%p(i)%corrsum = this%p(i)%corrsum + corr  
-                              this%p(i)%b_ij = this%p(i)%b_ij + corr*this%p(i2)%dW
-                              end do
-                           end do
+               ! Store particle data
+               r1=this%p(i)%pos
+
+               ! Zero out neighbor contribution
+               this%p(i)%b_ij    = 0.0_WP
+               this%p(i)%corrsum = 0.0_WP
+
+               ! Loop over nearest cells
+               do kk=this%p(i)%ind(3)-no,this%p(i)%ind(3)+no
+                  do jj=this%p(i)%ind(2)-no,this%p(i)%ind(2)+no
+                     do ii=this%p(i)%ind(1)-no,this%p(i)%ind(1)+no
+
+                        ! Loop over particles in that cell
+                        do nn=1,npic(ii,jj,kk)  
+                           ! Get index of neighbor particle
+                           i2=ipic(nn,ii,jj,kk)
+
+                           ! Get relevant data from correct storage
+                           if (i2.gt.0) then
+                              r2=this%p(i2)%pos
+                           else if (i2.lt.0) then
+                              i2=-i2
+                              r2=this%g(i2)%pos
+                           end if
+
+                           ! Compute relative information
+                           d12=norm2(r1-r2)
+                           corr = corr_func(d12)
+
+                           this%p(i)%corrsum = this%p(i)%corrsum + corr  
+                           this%p(i)%b_ij = this%p(i)%b_ij + corr*this%p(i2)%dW
                         end do
                      end do
-               end block correlate_neighbors
+                  end do
+               end do
+             end block correlate_neighbors
 
-               ! Increment OU process - 1st order
-               tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%b_ij(1)/this%p(i)%corrsum! - &
-                     !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
-               tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%b_ij(2)/this%p(i)%corrsum! - &
-                     !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
-               tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%b_ij(3)/this%p(i)%corrsum! - &
-                     !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
-             else
-                this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-                                random_normal(m=0.0_WP,sd=rdt), &
-                                random_normal(m=0.0_WP,sd=rdt)]
-                tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%dW(1)
-                tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%dW(2)
-                tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%dW(3)
-             end if
+             ! Increment OU process - 1st order
+             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*this%p(i)%b_ij(1)/this%p(i)%corrsum! - &
+             !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
+             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*this%p(i)%b_ij(2)/this%p(i)%corrsum! - &
+             !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
+             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*this%p(i)%b_ij(3)/this%p(i)%corrsum! - &
+             !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
+          else
+             this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt),random_normal(m=0.0_WP,sd=rdt),random_normal(m=0.0_WP,sd=rdt)]
+             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*this%p(i)%dW(1)
+             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*this%p(i)%dW(2)
+             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*this%p(i)%dW(3)
           end if
           ! Correct with midpoint rule
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,opt_dt=myp%dt,use_crw=use_crw)
-          myp%pos=pold%pos+mydt*myp%vel
-          myp%vel=pold%vel+mydt*(acc+this%gravity)
-          if (use_crw) then
-             tke = 0.01_WP! get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
-             sig_sg = sqrt(0.6666_WP*tke)
-             tau_crwi = sig_sg/sgs%delta(iii,jjj,kkk)/C_poz
-             this%p(i)%a_crw = tau_crwi
-             this%p(i)%b_crw = sig_sg*sqrt(2.0_WP*tau_crwi)
-            
-             this%p(i)%uf(1) = tmp1! + this%p(i)%b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
-             this%p(i)%uf(2) = tmp2! + this%p(i)%b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
-             this%p(i)%uf(3) = tmp3! + this%p(i)%b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
-          end if
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+          this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
+          this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
+          ! Stochastic update
+          call this%get_OU_coefficients(rho=rho,visc=visc,p=this%p(i),drift=a_crw,diffusion=b_crw)
+          this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
+          this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
+          this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
           ! Relocalize
-          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
-          ! Send source term back to the mesh
-          dmom=mydt*acc*this%rho*Pi/6.0_WP*myp%d**3
-          deng=sum(dmom*myp%vel)
-          if (this%cfg%nx.gt.1.and.present(srcU)) call this%cfg%set_scalar(Sp=-dmom(1),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcU,bc='n')
-          if (this%cfg%ny.gt.1.and.present(srcV)) call this%cfg%set_scalar(Sp=-dmom(2),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcV,bc='n')
-          if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcW,bc='n')
-          if (present(srcE))                      call this%cfg%set_scalar(Sp=-deng   ,pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcE,bc='n')
+          this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
           ! Increment
           dt_done=dt_done+mydt
        end do
        ! Correct the position to take into account periodicity
-       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
-       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
-       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
        ! Handle particles that have left the domain
-       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
-       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
-       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
+       if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
+       if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
        ! Relocalize the particle
-       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
        ! Count number of particles removed
-       if (myp%flag.eq.1) this%np_out=this%np_out+1
-       ! Copy back to particle
-       if (myp%id.ne.-1) this%p(i)=myp
-       if (use_crw) then
-          tke = 0.01_WP !get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
-          sig_sg = sqrt(0.6666_WP*tke)
-          tau_crwi = sig_sg/sgs%delta(iii,jjj,kkk)/C_poz
-          this%p(i)%a_crw = tau_crwi
-          this%p(i)%b_crw = sig_sg*sqrt(2.0_WP*tau_crwi)
-       end if
+       if (this%p(i)%flag.eq.1) this%np_out=this%np_out+1
     end do
 
     ! Communicate particles
@@ -608,22 +452,12 @@ contains
     ! Sum up particles removed
     call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
 
-    ! Divide source arrays by volume, sum at boundaries, and volume filter if present
-    if (present(srcU)) then
-       srcU=srcU/this%cfg%vol; call this%cfg%syncsum(srcU); call this%filter(srcU)
-    end if
-    if (present(srcV)) then
-       srcV=srcV/this%cfg%vol; call this%cfg%syncsum(srcV); call this%filter(srcV)
-    end if
-    if (present(srcW)) then
-       srcW=srcW/this%cfg%vol; call this%cfg%syncsum(srcW); call this%filter(srcW)
-    end if
-    if (present(srcE)) then
-       srcE=srcE/this%cfg%vol; call this%cfg%syncsum(srcE); call this%filter(srcE)
-    end if
-
     ! Recompute volume fraction
     call this%update_VF()
+
+    ! Cleanup
+    if (allocated(npic)) deallocate(npic)
+    if (allocated(ipic)) deallocate(ipic)
 
     ! Log/screen output
     logging: block
@@ -639,29 +473,29 @@ contains
       end if
     end block logging
 
-    contains 
-      
-      function corr_func(r) result(rhoij)
-         real(WP) :: r, rhoij
- 
-         select case(trim(this%corr_type))
-         case('exp')
-            rhoij = 1.0_WP
+  contains 
+
+    function corr_func(r) result(rhoij)
+      real(WP) :: r, rhoij
+
+      select case(trim(this%corr_type))
+      case('exp')
+         rhoij = 1.0_WP
          ! case('inferred')
          !    rhoij = inferredcorr(r)
-         case('linear')
-            rhoij = 1.0_WP - 2.5_WP*r
-         case default
-            rhoij = 1.0_WP
-         end select
- 
-       end function corr_func
+      case('linear')
+         rhoij = 1.0_WP - 2.5_WP*r
+      case default
+         rhoij = 1.0_WP
+      end select
+
+    end function corr_func
 
   end subroutine advance
 
 
   !> Calculate RHS of the particle ODEs
-  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,T,p,acc,torque,opt_dt,use_crw)
+  subroutine get_rhs(this,U,V,W,rho,visc,p,acc,opt_dt)
     implicit none
     class(crw), intent(inout) :: this
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -669,85 +503,61 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     type(part), intent(in) :: p
-    logical, intent(in) :: use_crw
     real(WP), dimension(3), intent(out) :: acc
     real(WP), intent(out) :: opt_dt
     real(WP) :: fvisc,frho,pVF,fVF,fT
-    real(WP), dimension(3) :: fvel,fstress,fvort
+    real(WP) :: Re,tau,corr,b1,b2
+    real(WP), dimension(3) :: fvel,fvort
 
-    ! Interpolate fluid quantities to particle location
-    interpolate: block
-      ! Interpolate the fluid phase velocity to the particle location
-      fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
-      if (use_crw) then
-         fvel=fvel+p%uf
-      end if
-      ! Interpolate the fluid phase stress to the particle location
-      fstress=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=stress_x,V=stress_y,W=stress_z)
-      ! Interpolate the fluid phase viscosity to the particle location
-      fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
-      fvisc=fvisc+epsilon(1.0_WP)
-      ! Interpolate the fluid phase density to the particle location
-      frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
-      ! Interpolate the particle volume fraction to the particle location
-      pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
-      fVF=1.0_WP-pVF
-      ! Interpolate the fluid temperature to the particle location if present
-      if (present(T)) fT=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=T,bc='n')
-      ! Interpolate the fluid vorticity to the particle location if needed
-      !if (this%use_lift) fvort=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
-    end block interpolate
-
-    ! Compute acceleration due to drag
-    compute_drag: block
-      real(WP) :: Re,tau,corr,b1,b2
-      ! Particle Reynolds number
-      Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
-      ! Drag correction
-      select case(trim(this%drag_model))
-      case('None','none')
-         corr=epsilon(1.0_WP)
-      case('Stokes')
-         corr=1.0_WP
-      case('Schiller-Naumann','Schiller Naumann','SN')
-         corr=1.0_WP+0.15_WP*Re**(0.687_WP)
-      case('Tenneti')
-         ! Tenneti and Subramaniam (2011)
-         b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
-         b2=pVF**3*Re*(0.95_WP+0.61_WP*pVF**3/fVF**2)
-         corr=fVF*(1.0_WP+0.15_WP*Re**(0.687_WP)/fVF**3+b1+b2)           
-      case('Khalloufi Capecelatro','KC')
-         !> Todo
-      case default
-         corr=1.0_WP
-      end select
-      ! Particle response time
-      tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
-      ! Return acceleration and optimal timestep size
-      acc=(fvel-p%vel)/tau+fstress/this%rho
-      opt_dt=tau/real(this%nstep,WP)
-    end block compute_drag
-
-    ! Compute acceleration due to Saffman lift
-    compute_lift: block
-      use mathtools, only: Pi,cross_product
-      real(WP) :: omegag,Cl,Reg
-      if (this%use_lift) then
-         omegag=sqrt(sum(fvort**2))
-         if (omegag.gt.0.0_WP) then
-            Reg = p%d**2*omegag*frho/fvisc
-            Cl = 9.69_WP/Pi/p%d**2/this%rho*fvisc/omegag*sqrt(Reg)
-            acc=acc+Cl*cross_product(fvel-p%vel,fvort)
-         end if
-      end if
-    end block compute_lift
+    ! Interpolate the fluid phase velocity to the particle location
+    fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
+    fvel=fvel+p%us
+    ! Interpolate the fluid phase viscosity to the particle location
+    fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
+    fvisc=fvisc+epsilon(1.0_WP)
+    ! Interpolate the fluid phase density to the particle location
+    frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
+    ! Interpolate the particle volume fraction to the particle location
+    pVF=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%VF,bc='n')
+    fVF=1.0_WP-pVF
+    ! Particle Reynolds number
+    Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
+    ! Drag correction based on Schiller-Naumann
+    corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+    ! Particle response time
+    tau=this%rho*p%d**2/(18.0_WP*fvisc*corr)
+    ! Return acceleration and optimal timestep size
+    acc=(fvel-p%vel)/tau+fstress/this%rho
+    opt_dt=tau/real(this%nstep,WP)
 
   end subroutine get_rhs
+
+
+  !> Calculate drift and diffusion coefficients
+  subroutine get_OU_coefficient(thisrho,visc,p,drift,diffusion)
+    implicit none
+    class(crw), intent(inout) :: this
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    type(part), intent(in) :: p
+    real(WP), intent(out) :: drift,diffusion
+    real(WP) :: fvisc,frho,tke,sig_sg,tau_crwi
+
+    ! Interpolate the fluid phase viscosity and density to the particle location
+    fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
+    frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
+
+    delta=this%cfg%min_meshsize
+
+    tke = 10.0_WP !get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
+
+    sig_sg = sqrt(0.6666_WP*tke)
+    tau_crwi = sig_sg/delta/C_poz
+
+    drift = tau_crwi
+    diffusion = sig_sg*sqrt(2.0_WP*tau_crwi)
+  end subroutine get_drift_diffusion
 
 
   !> Update particle volume fraction using our current particles
@@ -874,213 +684,6 @@ contains
 
   end subroutine filter
 
-
-  !> Inject particles from a prescribed location with given mass flowrate
-  !> Requires injection parameters to be set beforehand
-  subroutine inject(this,dt)
-    use mpi_f08
-    use parallel, only: MPI_REAL_WP
-    use mathtools, only: Pi
-    implicit none
-    class(crw), intent(inout) :: this
-    real(WP), intent(inout) :: dt              !< Timestep size over which to advance
-    real(WP) :: inj_min(3),inj_max(3)          !< Min/max extents of injection
-    real(WP) :: Mgoal,Madded,Mtmp,buf          !< Mass flow rate parameters
-    real(WP), save :: previous_error=0.0_WP    !< Store mass left over from previous timestep
-    integer(kind=8) :: maxid_,maxid            !< Keep track of maximum particle id
-    integer :: i,j,np0_,np2,np_tmp,count,ierr
-    integer, dimension(:), allocatable :: nrecv
-    type(part), dimension(:), allocatable :: p2
-    type(MPI_Status) :: status
-    logical :: overlap
-    
-    ! Initial number of particles
-    np0_=this%np_
-    this%np_new=0
-
-    ! Get the particle mass that should be added to the system
-    Mgoal  = this%mfr*dt+previous_error
-    Madded = 0.0_WP
-
-    ! Determine id to assign to particle
-    maxid_=0
-    do i=1,this%np_
-       maxid_=max(maxid_,this%p(i)%id)
-    end do
-    call MPI_ALLREDUCE(maxid_,maxid,1,MPI_INTEGER8,MPI_MAX,this%cfg%comm,ierr)
-
-    ! Communicate nearby particles to check for overlap
-    if (this%use_col) then
-       allocate(nrecv(this%cfg%nproc))
-       count=0
-       inj_min(1)=this%cfg%x(this%cfg%imino)
-       inj_max(1)=this%inj_pos(1)+this%inj_dmax
-       inj_min(2)=this%inj_pos(2)-0.5_WP*this%inj_d-this%inj_dmax
-       inj_max(2)=this%inj_pos(2)+0.5_WP*this%inj_d+this%inj_dmax
-       inj_min(3)=this%inj_pos(3)-0.5_WP*this%inj_d-this%inj_dmax
-       inj_max(3)=this%inj_pos(3)+0.5_WP*this%inj_d+this%inj_dmax
-       do i=1,this%np_
-          if ( this%p(i)%pos(1).gt.inj_min(1).and.this%p(i)%pos(1).lt.inj_max(1) .and.&
-               this%p(i)%pos(2).gt.inj_min(2).and.this%p(i)%pos(2).lt.inj_max(2) .and.&
-               this%p(i)%pos(3).gt.inj_min(3).and.this%p(i)%pos(3).lt.inj_max(3)) count=count+1
-       end do
-       call MPI_GATHER(count,1,MPI_INTEGER,nrecv,1,MPI_INTEGER,0,this%cfg%comm,ierr)
-       if (this%cfg%amRoot) then
-          np2=sum(nrecv)
-          allocate(p2(np2))
-       else
-          allocate(p2(count))
-       end if
-       count=0
-       do i=1,this%np_
-          if ( this%p(i)%pos(1).gt.inj_min(1).and.this%p(i)%pos(1).lt.inj_max(1) .and.&
-               this%p(i)%pos(2).gt.inj_min(2).and.this%p(i)%pos(2).lt.inj_max(2) .and.&
-               this%p(i)%pos(3).gt.inj_min(3).and.this%p(i)%pos(3).lt.inj_max(3)) then
-             count=count+1
-             p2(count)=this%p(i)
-          end if
-       end do
-       if (this%cfg%amRoot) then
-          do i=2,this%cfg%nproc
-             if (nrecv(i).gt.0) then
-                call MPI_recv(p2(sum(nrecv(1:i-1))+1:sum(nrecv(1:i))),nrecv(i),MPI_PART,i-1,0,this%cfg%comm,status,ierr)
-             end if
-          end do
-       else
-          if (count.gt.0) call MPI_send(p2,count,MPI_PART,0,0,this%cfg%comm,ierr)
-       end if
-       deallocate(nrecv)
-    end if
-
-    ! Add new particles until desired mass is achieved
-    do while (Madded.lt.Mgoal)
-
-       if (this%cfg%amRoot) then
-          ! Initialize parameters
-          Mtmp = 0.0_WP
-          np_tmp = 0
-          ! Loop while the added volume is not sufficient
-          do while (Mtmp.lt.Mgoal-Madded)
-             ! Increment counter
-             np_tmp=np_tmp+1
-             count = np0_+np_tmp
-             ! Create space for new particle
-             call this%resize(count)
-             ! Generate a diameter
-             this%p(count)%d=get_diameter()
-             ! Set various parameters for the particle
-             this%p(count)%id    =maxid+int(np_tmp,8)
-             this%p(count)%dt    =0.0_WP
-             this%p(count)%Acol  =0.0_WP
-             this%p(count)%Tcol  =0.0_WP
-             this%p(count)%T     =this%inj_T
-             this%p(count)%angVel=0.0_WP
-             ! Give a position at the injector to the particle
-             this%p(count)%pos=get_position()
-             overlap=.false.
-             ! Check overlap with particles recently injected
-             if (this%use_col) then
-                do j=1,np_tmp-1
-                   if (norm2(this%p(count)%pos-this%p(j)%pos).lt.0.5_WP*(this%p(count)%d+this%p(j)%d)) overlap=.true.
-                end do
-                ! Check overlap with all other particles
-                if (.not.overlap) then
-                   do j=1,np2
-                      if (norm2(this%p(count)%pos-p2(j)%pos).lt.0.5_WP*(this%p(count)%d+p2(j)%d)) overlap=.true.
-                   end do
-                end if
-             end if
-
-             if (overlap) then
-                ! Try again
-                np_tmp=np_tmp-1
-             else
-                ! Localize the particle
-                this%p(count)%ind(1)=this%cfg%imin; this%p(count)%ind(2)=this%cfg%jmin; this%p(count)%ind(3)=this%cfg%kmin
-                this%p(count)%ind=this%cfg%get_ijk_global(this%p(count)%pos,this%p(count)%ind)
-                ! Give it a velocity
-                this%p(count)%vel=this%inj_vel
-                ! Make it an "official" particle
-                this%p(count)%flag=0
-                ! Update the added mass for the timestep
-                Mtmp = Mtmp + this%rho*Pi/6.0_WP*this%p(count)%d**3
-             end if
-          end do
-       end if
-       ! Communicate particles
-       call this%sync()
-       ! Loop through newly created particles
-       buf=0.0_WP
-       do i=np0_+1,this%np_
-          ! Remove if out of bounds
-          if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) this%p(i)%flag=1
-          if (this%p(i)%flag.eq.0) then
-             ! Update the added mass for the timestep
-             buf = buf + this%rho*Pi/6.0_WP*this%p(i)%d**3
-             ! Update the max particle id
-             maxid = max(maxid,this%p(i)%id)
-             ! Increment counter
-             this%np_new=this%np_new+1
-          end if
-       end do
-       ! Total mass added
-       call MPI_ALLREDUCE(buf,Mtmp,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr); Madded=Madded+Mtmp
-       ! Clean up particles
-       call this%recycle()
-       ! Update initial npart
-       np0_=this%np_
-       ! Maximum particle id
-       call MPI_ALLREDUCE(maxid,maxid_,1,MPI_INTEGER8,MPI_MAX,this%cfg%comm,ierr); maxid=maxid_
-    end do
-
-    ! Remember the error
-    previous_error = Mgoal-Madded
-
-    ! Sum up injected particles
-    call MPI_ALLREDUCE(this%np_new,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_new=i
-
-    if (allocated(p2)) deallocate(p2)
-
-  contains
-
-    ! Compute particle diameter
-    function get_diameter() result(dp)
-      use random, only: random_lognormal
-      implicit none
-      real(WP) :: dp
-      dp=random_lognormal(m=this%inj_dmean-this%inj_dshift,sd=this%inj_dsd)+this%inj_dshift
-      do while (dp.gt.this%inj_dmax+epsilon(1.0_WP).or.dp.lt.this%inj_dmin-epsilon(1.0_WP))
-         dp=random_lognormal(m=this%inj_dmean-this%inj_dshift,sd=this%inj_dsd)+this%inj_dshift
-      end do
-    end function get_diameter
-
-    ! Position for bulk injection of particles
-    function get_position() result(pos)
-      use random, only: random_uniform
-      use mathtools, only: twoPi
-      implicit none
-      real(WP), dimension(3) :: pos
-      real(WP) :: rand,r,theta
-      integer :: ip,jp,kp
-      ! Set x position
-      pos(1) = this%inj_pos(1)
-      ! Random y & z position within a circular region
-      if (this%cfg%nz.eq.1) then
-         pos(2)=random_uniform(lo=this%inj_pos(2)-0.5_WP*this%inj_d,hi=this%inj_pos(3)+0.5_WP*this%inj_d)
-         pos(3) = this%cfg%zm(this%cfg%kmin_)
-      else
-         rand=random_uniform(lo=0.0_WP,hi=1.0_WP)
-         r=0.5_WP*this%inj_d*sqrt(rand) !< sqrt(rand) avoids accumulation near the center
-         call random_number(rand)
-         theta=random_uniform(lo=0.0_WP,hi=twoPi)
-         pos(2) = this%inj_pos(2)+r*sin(theta)
-         pos(3) = this%inj_pos(3)+r*cos(theta)
-      end if
-    end function get_position
-
-  end subroutine inject
-  
-  
   !> Calculate the CFL
   subroutine get_cfl(this,dt,cfl)
     use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX
@@ -1109,13 +712,7 @@ contains
 
     ! Return the maximum convective CFL
     cfl=max(this%CFLp_x,this%CFLp_y,this%CFLp_z)
-    if (this%use_col) then
-       my_CFL_col=10.0_WP*my_CFL_col*dt
-       call MPI_ALLREDUCE(my_CFL_col,this%CFL_col,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr)
-       cfl = max(cfl,this%CFL_col)
-    else
-       this%CFL_col=0.0_WP
-    end if
+    this%CFL_col=0.0_WP
 
   end subroutine get_cfl
 

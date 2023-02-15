@@ -718,7 +718,7 @@ contains
          
       end block pic_prep
     end if
-    if (use_crw) call this%update_dW(dt=dt)
+    if (use_crw.and.spatial) call this%update_dW(dt=dt)
     ! Advance the equations
     do i=1,this%np_
        ! Avoid particles with id=0
