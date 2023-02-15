@@ -260,27 +260,68 @@ contains
     end do
   end subroutine update_dW
 
+  !> Calculate drift and diffusion coefficients
+  subroutine get_OU_coefficients(this,rho,visc,p,drift,diffusion,SR)
+   implicit none
+   class(crw), intent(inout) :: this
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   type(part), intent(in) :: p
+   real(WP), intent(out) :: drift,diffusion
+   real(WP) :: fvisc,frho,tke_sgs,eps_sgs,sig_sg,tau_crwi,fsr
+   real(WP) :: delta, C, Cy, Cs
+
+   ! Interpolate the fluid phase viscosity, density, and strain rate magnitude to the particle location
+   fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='d')
+   frho =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho ,bc='d')
+   fsr  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=SR  ,bc='d')
+
+   C = 1.5_WP
+   Cy = 0.05_WP
+   Cs = 0.17_WP
+
+   delta=this%cfg%min_meshsize
+
+   ! Pozorski & Apte (2009) : k_sgs = (nu_eddy / (0.067 * Delta))^2
+   ! Marchioli (2017)       : k_sgs = 2*C_y*Delta^2*|S_ij|^2
+   ! - this second one is equivalent to : k_sgs = (nu_e/(C_nu Delta))^2 
+
+   tke_sgs = 2.0_WP*Cy*delta**2*fsr**3
+   eps_sgs = Cs*delta**2*fsr**3
+
+   tau_crwi = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs 
+
+   ! tke = (fvisc/frho/delta/0.05_WP)**2
+
+   ! sig_sg = sqrt(0.6666_WP*tke)
+   ! tau_crwi = sig_sg/delta/C_poz
+
+   drift = tau_crwi
+   diffusion = sqrt(C*eps_sgs)
+ end subroutine get_OU_coefficients
+
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,spatial,sgs)
+  subroutine advance(this,dt,U,V,W,rho,visc,eddyvisc,spatial,SR)
     use mpi_f08,        only : MPI_SUM,MPI_INTEGER
     use mathtools,      only: Pi
-    use sgsmodel_class, only: sgsmodel
     use random,         only: random_normal
     implicit none
     class(crw), intent(inout) :: this
-    class(sgsmodel), intent(in), optional :: sgs
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     logical, intent(in), optional :: spatial
     integer :: i,j,k,ierr,no
     real(WP), dimension(3) :: b_ij
-    real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum
+    real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum,rmydt
     real(WP) :: tmp1,tmp2,tmp3
     real(WP), dimension(3) :: acc,dmom
     integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
@@ -355,6 +396,7 @@ contains
        do while (dt_done.lt.dt)
           ! Decide the timestep size
           mydt=min(this%p(i)%dt,dt-dt_done)
+          rmydt=sqrt(mydt)
           ! Remember the particle
           pold=this%p(i)
           ! Advance with Euler prediction
@@ -362,7 +404,7 @@ contains
           this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
           ! Stochastic update
-          call this%get_OU_coefficients(rho=rho,visc=visc,p=this%p(i),drift=a_crw,diffusion=b_crw)
+          call this%get_OU_coefficients(rho=rho,visc=eddyvisc,p=this%p(i),drift=a_crw,diffusion=b_crw,SR=SR)
 
           if (spatial_) then
              correlate_neighbors: block
@@ -416,7 +458,7 @@ contains
              tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*b_ij(3)/corrsum! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
           else
-             this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt),random_normal(m=0.0_WP,sd=rdt),random_normal(m=0.0_WP,sd=rdt)]
+             this%p(i)%dW = [random_normal(m=0.0_WP,sd=rmydt),random_normal(m=0.0_WP,sd=rmydt),random_normal(m=0.0_WP,sd=rmydt)]
              tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*this%p(i)%dW(1)
              tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*this%p(i)%dW(2)
              tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*this%p(i)%dW(3)
@@ -426,7 +468,7 @@ contains
           this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
           ! Stochastic update
-          call this%get_OU_coefficients(rho=rho,visc=visc,p=this%p(i),drift=a_crw,diffusion=b_crw)
+          call this%get_OU_coefficients(rho=rho,visc=eddyvisc,p=this%p(i),drift=a_crw,diffusion=b_crw,SR=SR)
           this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
           this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
           this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
@@ -535,33 +577,6 @@ contains
     opt_dt=tau/real(this%nstep,WP)
 
   end subroutine get_rhs
-
-
-  !> Calculate drift and diffusion coefficients
-  subroutine get_OU_coefficients(this,rho,visc,p,drift,diffusion)
-    implicit none
-    class(crw), intent(inout) :: this
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    type(part), intent(in) :: p
-    real(WP), intent(out) :: drift,diffusion
-    real(WP) :: fvisc,frho,tke,sig_sg,tau_crwi
-    real(WP) :: delta
-
-    ! Interpolate the fluid phase viscosity and density to the particle location
-    fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
-    frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
-
-    delta=this%cfg%min_meshsize
-
-    tke = 10.0_WP !get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
-
-    sig_sg = sqrt(0.6666_WP*tke)
-    tau_crwi = sig_sg/delta/C_poz
-
-    drift = tau_crwi
-    diffusion = sig_sg*sqrt(2.0_WP*tau_crwi)
-  end subroutine get_OU_coefficients
 
 
   !> Update particle volume fraction using our current particles

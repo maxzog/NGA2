@@ -52,7 +52,7 @@ module simulation
    real(WP) :: stk,tau_eta
    real(WP) :: meanvisc,Lx,N
    real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
-   logical  :: linforce,use_sgs,maxRe,use_crw
+   logical  :: linforce,use_sgs,maxRe
    integer  :: sgs_type
 
    !> For monitoring
@@ -334,7 +334,6 @@ contains
          ! Get number of particles
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
-         call param_read('Use CRW', use_crw)
          if (.false.) then
             call param_read('Restart from',timestamp,'r')
             ! Read the part file
@@ -357,12 +356,6 @@ contains
                   lp%p(i)%vel=0.0_WP
                   ! OU
                   lp%p(i)%us=0.0_WP
-                  if (use_crw) then
-                     ! lp%p(i)%us= [random_normal(m=0.0_WP,sd=0.1_WP),& 
-                     !              random_normal(m=0.0_WP,sd=0.1_WP),&    
-                     !              random_normal(m=0.0_WP,sd=0.1_WP)] 
-                     lp%p(i)%us = 0.0_WP
-                  end if
                   ! Give zero dt
                   lp%p(i)%dt=0.0_WP
                   ! Locate the particle on the mesh
@@ -541,11 +534,14 @@ contains
          call time%adjust_dt()
          call time%increment()
 
+         call fs%get_strainrate(SR=SR)
+         ! should be sqrt(2.0_WP * [...])
+         SR2=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
 
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs=sgs)
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,SR=SR2)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Remember old velocity
@@ -558,7 +554,6 @@ contains
          wt_sgs%time_in=parallel_time()
          if (use_sgs) then
             fs%visc=visc
-            call fs%get_strainrate(SR=SR)
             call fs%get_gradu(gradu=gradu)
             resU=fs%rho
             call sgs%get_visc(type=sgs_type,rho=resU,gradu=gradu,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
