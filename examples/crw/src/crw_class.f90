@@ -325,7 +325,7 @@ contains
     real(WP), dimension(3) :: b_ij
     real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum,rmydt
     real(WP) :: tmp1,tmp2,tmp3
-    real(WP), dimension(3) :: acc,dmom
+    real(WP), dimension(3) :: acc,dmom,dW
     integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
     integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
     type(part) :: pold
@@ -333,7 +333,6 @@ contains
 
     spatial_=.false.
     if (present(spatial)) spatial_=spatial
-    spatial_ = .false.
     
     rdt = sqrt(dt)
 
@@ -344,6 +343,7 @@ contains
 
        ! Share particles across overlap
        no = max(2,this%cfg%no)
+       no = 2
        call this%share(no)
 
        ! We can now assemble particle-in-cell information
@@ -435,9 +435,11 @@ contains
                            ! Get relevant data from correct storage
                            if (i2.gt.0) then
                               r2=this%p(i2)%pos
+                              dW=this%p(i2)%dW
                            else if (i2.lt.0) then
                               i2=-i2
                               r2=this%g(i2)%pos
+                              dW=this%g(i2)%dW
                            end if
 
                            ! Compute relative information
@@ -445,7 +447,7 @@ contains
                            corr = corr_func(d12)
 
                            corrsum = corrsum + corr  
-                           b_ij = b_ij + corr*this%p(i2)%dW
+                           b_ij = b_ij + corr*dW
                         end do
                      end do
                   end do

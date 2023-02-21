@@ -19,8 +19,8 @@ Force to maximum Re_lambda : .false.
 Particle density :     1000
 Particle Stokes number :1.0
 Particle diameter : 1.57224E-03
-Number of particles :  200000 # 250000
-Use CRW :              .true.
+Number of particles :  10000 # 250000
+Use SCRW :              .false.
 
 # LES
 Use SGS model : .true.

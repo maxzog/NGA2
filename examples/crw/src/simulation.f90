@@ -52,7 +52,7 @@ module simulation
    real(WP) :: stk,tau_eta
    real(WP) :: meanvisc,Lx,N
    real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
-   logical  :: linforce,use_sgs,maxRe
+   logical  :: linforce,use_sgs,maxRe,spatial
    integer  :: sgs_type
 
    !> For monitoring
@@ -173,7 +173,7 @@ contains
          call param_read(tag='Use SGS model',val=use_sgs,default=.false.)
          if (use_sgs) call param_read('SGS model type',sgs_type)
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-         sgs%Cs_ref=0.1_WP
+         sgs%Cs_ref=0.01_WP
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -333,6 +333,8 @@ contains
          call param_read('Particle diameter', dp)
          ! Get number of particles
          call param_read('Number of particles',np)
+         ! Check if spatially correlated
+         call param_read('Use SCRW', spatial, default=.false.)
          ! Check if a stochastic SGS model is used
          if (.false.) then
             call param_read('Restart from',timestamp,'r')
@@ -561,7 +563,7 @@ contains
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,SR=SR2)
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,SR=SR2,spatial=spatial)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Perform sub-iterations
