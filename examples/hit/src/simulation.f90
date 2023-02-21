@@ -71,13 +71,56 @@ module simulation
    type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest,wt_sgs,wt_stat,wt_force
    
 contains
-   
+
+   !> Compute turbulence stats
+   subroutine compute_stats()
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      real(WP) :: myTKE,myEPS
+      integer :: i,j,k,ierr
+
+      ! Compute mean velocities
+      call fs%cfg%integrate(A=Ui,integral=meanU); meanU=meanU/fs%cfg%vol_total
+      call fs%cfg%integrate(A=Vi,integral=meanV); meanV=meanV/fs%cfg%vol_total
+      call fs%cfg%integrate(A=Wi,integral=meanW); meanW=meanW/fs%cfg%vol_total
+
+      ! Compute strainrate and grad(u)
+      call fs%get_strainrate(SR=SR)
+      call fs%get_gradu(gradu=gradu)
+
+      myTKE=0.0_WP; myEPS=0.0_WP
+      mysgsTKE=0.0_WP
+
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
+               myTKE = myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+               myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE=TKE/fs%cfg%vol_total
+      call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPS=EPS/fs%cfg%vol_total
+
+      URMS = sqrt(2.0_WP/3.0_WP*TKE)
+      Re_L = TKE**2.0_WP/EPS/visc
+      Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
+      eta = (visc**3.0_WP/EPS)**0.25_WP
+      ell = (0.6667_WP*TKE)**1.5_WP / EPS
+
+      nondtime  = time%t/tauinf
+      dx_eta    = dx/eta
+      eps_ratio = EPS/EPS0
+      tke_ratio = TKE/TKE0
+      ell_Lx    = ell/Lx
+      Re_ratio  = Re_lambda/Re_max
+   end subroutine compute_stats
    
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
       implicit none
-      
       
       ! Allocate work arrays
       allocate_work_arrays: block
@@ -253,70 +296,10 @@ contains
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
+
+         ! Compute turbulence stats
+         call compute_stats()
       end block initialize_velocity
-      
-      ! Compute turbulence statistics for monitor at time=0
-      compute_stats: block 
-         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-         use parallel, only: MPI_REAL_WP
-         real(WP) :: mysgstke,myvisc,myTKE,myEPS,gu2buf
-         real(WP) :: mysgsEPSp,myEPSp
-         integer :: i,j,k,ierr
-
-         myvisc=0.0_WP; myTKE=0.0_WP; myEPS=0.0_WP
-         sgsTKE=0.0_WP; mysgstke=0.0_WP; 
-         mysgsEPSp=0.0_WP; myEPSp=0.0_WP
-
-         call fs%get_strainrate(SR=SR)
-         call fs%get_gradu(gradu=gradu)
-
-         do k=fs%cfg%kmin_,fs%cfg%kmax_
-            do j=fs%cfg%jmin_,fs%cfg%jmax_
-               do i=fs%cfg%imin_,fs%cfg%imax_
-                  ! LES stats
-                  mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
-                  myvisc = myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
-
-                  ! Resolved TKE
-                  myTKE = myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
-
-                  ! Dissipation
-                  myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
-
-                  ! Pseudo-dissipation (sgs, total)
-                  gu2buf = gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
-                           gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
-                           gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2
-
-                  mysgsEPSp=mysgsEPSp+fs%cfg%vol(i,j,k)*sgs%visc(i,j,k)*gu2buf
-                  myEPSp=myEPSp+fs%cfg%vol(i,j,k)*fs%visc(i,j,k)*gu2buf
-               end do
-            end do
-         end do
-
-         call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
-
-         call MPI_ALLREDUCE(mysgstke,sgsTKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKE=sgsTKE/fs%cfg%vol_total
-         call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE=TKE/fs%cfg%vol_total
-
-         call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr        ); EPS=EPS/fs%cfg%vol_total
-         call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); EPSp=EPSp/fs%cfg%vol_total
-         call MPI_ALLREDUCE(mysgsEPSp,sgsEPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsEPSp=sgsEPSp/fs%cfg%vol_total
-
-         URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
-         Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
-         Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
-         eta = (meanvisc**3.0_WP/EPS)**0.25_WP
-         ell = (0.6667_WP*TKE)**1.5_WP / EPS
-         tau_eta = sqrt(visc/EPS0)
-         
-         nondtime  = time%t/tauinf
-         dx_eta    = dx/eta
-         eps_ratio = EPS/EPS0
-         tke_ratio = TKE/TKE0
-         ell_Lx    = ell/Lx
-         Re_ratio  = Re_lambda/Re_max
-      end block compute_stats
       
       ! Initialize LPT solver
       initialize_lpt: block
@@ -343,6 +326,7 @@ contains
          else
          ! Root process initializes np particles randomly
             if (lp%cfg%amRoot) then
+               tau_eta = sqrt(visc/EPS0)
                dp = sqrt(18.0_WP*visc*stk*tau_eta/lp%rho)
                call lp%resize(np)
                do i=1,np
@@ -674,64 +658,7 @@ contains
          wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
 
          wt_stat%time_in=parallel_time()
-         ! Compute turbulence statistics for monitor
-         compute_stats: block 
-            use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-            use parallel, only: MPI_REAL_WP
-            real(WP) :: mysgstke,myvisc,myTKE,myEPS
-            real(WP) :: mysgsEPSp,myEPSp
-            integer :: i,j,k,ierr
-
-            myvisc=0.0_WP; myTKE=0.0_WP; myEPS=0.0_WP
-            sgsTKE=0.0_WP; mysgstke=0.0_WP; 
-            mysgsEPSp=0.0_WP
-
-            call fs%get_strainrate(SR=SR)
-            call fs%get_gradu(gradu=gradu)
-
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     ! LES stats
-                     mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
-                     myvisc = myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
-
-                     ! Resolved TKE
-                     myTKE = myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
-
-                     ! Dissipation
-                     myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
-
-                     ! Pseudo-dissipation (sgs, resolved, total)
-                     mysgsEPSp=mysgsEPSp+fs%cfg%vol(i,j,k)*sgs%visc(i,j,k)*(                   &
-                                 gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
-                                 gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
-                                 gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
-                  end do
-               end do
-            end do
-
-            call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
-
-            call MPI_ALLREDUCE(mysgstke,sgsTKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKE=sgsTKE/fs%cfg%vol_total
-            call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE=TKE/fs%cfg%vol_total
-
-            call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr        ); EPS=EPS/fs%cfg%vol_total
-            call MPI_ALLREDUCE(mysgsEPSp,sgsEPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsEPSp=sgsEPSp/fs%cfg%vol_total
-
-            URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
-            Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
-            Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
-            eta = (meanvisc**3.0_WP/EPS)**0.25_WP
-            ell = (0.6667_WP*TKE)**1.5_WP / EPS
-            
-            nondtime  = time%t/tauinf
-            dx_eta    = dx/eta
-            eps_ratio = EPS/EPS0
-            tke_ratio = TKE/TKE0
-            ell_Lx    = ell/Lx
-            Re_ratio  = Re_lambda/Re_max
-         end block compute_stats
+         call compute_stats()
          wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
          
          ! Output to ensight
