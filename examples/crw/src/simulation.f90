@@ -330,7 +330,7 @@ contains
          ! Get particle density from the input
          call param_read('Particle density',lp%rho)
          ! Get particle diameter from the input
-         call param_read('Particle Stokes number', stk)
+         call param_read('Particle diameter', dp)
          ! Get number of particles
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
@@ -341,7 +341,7 @@ contains
          else
          ! Root process initializes np particles randomly
             if (lp%cfg%amRoot) then
-               dp = sqrt(18.0_WP*visc*stk*tau_eta/lp%rho)
+               !dp = sqrt(18.0_WP*visc*stk*tau_eta/lp%rho)
                call lp%resize(np)
                do i=1,np
                   ! Give id
@@ -536,13 +536,7 @@ contains
 
          call fs%get_strainrate(SR=SR)
          ! should be sqrt(2.0_WP * [...])
-         SR2=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
-
-         wt_lpt%time_in=parallel_time()
-         ! Advance particles by dt
-         resU=fs%rho; resV=fs%visc
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,SR=SR2)
-         wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
+         SR2=sqrt(2.0_WP*(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)))
          
          ! Remember old velocity
          fs%Uold=fs%U
@@ -563,6 +557,12 @@ contains
             fs%visc=fs%visc+sgs%visc
          end if
          wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
+         
+         wt_lpt%time_in=parallel_time()
+         ! Advance particles by dt
+         resU=fs%rho; resV=fs%visc
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,SR=SR2)
+         wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)

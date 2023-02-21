@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 1 2
+Partition :	1 8 4
 
 # Mesh definition
 Lx :	6.2832
@@ -18,21 +18,22 @@ Force to maximum Re_lambda : .false.
 # Particle properties
 Particle density :     1000
 Particle Stokes number :1.0
-Number of particles :  1000 # 250000
+Particle diameter : 1.57224E-03
+Number of particles :  200000 # 250000
 Use CRW :              .true.
 
 # LES
 Use SGS model : .true.
-SGS model type : 2
+SGS model type : 1
 
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
-Max iter :          2500
+Max iter :          10000
 
 # Ensight output
-Ensight output period : 1.0
+Ensight output period : 0.1
 
 # Restart config
-# Restart from : 1.00044E-02
+Restart from : les32 #1.00044E-02
 Restart output period : 0.2

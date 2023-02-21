@@ -1,11 +1,10 @@
 # NGA location if not yet defined
-NGA_HOME ?= ../..
+NGA_HOME ?= /home/maxzog/NGA2s/nga2restart/
 
 # Compilation parameters
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_FFTW  = TRUE
-USE_P3DFFT= TRUE
 USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
@@ -23,16 +22,16 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
-HYPRE_DIR = /Users/maxzog/hypre/
-LAPACK_DIR= /usr/local/Cellar/lapack/3.11/
-FFTW_DIR  = /usr/local/Cellar/fftw/3.3.10_1/
+# Define external libraries - this can also be in .profile
+LAPACK_DIR= /usr/lapack/#/usr/local/Cellar/lapack/3.11
+HYPRE_DIR = /opt/libs/hypre/#/Users/maxzog/builds/hypre/src/hypre
+FFTW_DIR  = /opt/libs/fftw3/#/usr/local/Cellar/fftw/3.3.10_1
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := particles core constant_density subgrid data solver config grid libraries
+Bdirs   := particles core subgrid constant_density data solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 

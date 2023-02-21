@@ -278,8 +278,8 @@ contains
    fsr  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=SR  ,bc='d')
 
    C = 1.5_WP
-   Cy = 0.05_WP
-   Cs = 0.17_WP
+   Cy = 0.0022_WP
+   Cs = 0.1_WP
 
    delta=this%cfg%min_meshsize
 
@@ -287,18 +287,20 @@ contains
    ! Marchioli (2017)       : k_sgs = 2*C_y*Delta^2*|S_ij|^2
    ! - this second one is equivalent to : k_sgs = (nu_e/(C_nu Delta))^2 
 
-   tke_sgs = 2.0_WP*Cy*delta**2*fsr**3
-   eps_sgs = Cs*delta**2*fsr**3
+   ! =Febe=
+   ! tke_sgs = 2.0_WP*Cy*delta**2*fsr**3
+   ! =Pozorski and Apte=
+   tke_sgs = (fvisc/frho/delta/0.067_WP)**2 
 
-   tau_crwi = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs 
-
-   ! tke = (fvisc/frho/delta/0.05_WP)**2
-
-   ! sig_sg = sqrt(0.6666_WP*tke)
-   ! tau_crwi = sig_sg/delta/C_poz
+   ! eps_sgs = Cs*delta**2*fsr**3
+   ! tau_crwi = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs 
+   
+   sig_sg = sqrt(0.6666_WP*tke_sgs)
+   tau_crwi = sig_sg/delta/C_poz
 
    drift = tau_crwi
-   diffusion = sqrt(C*eps_sgs)
+   ! diffusion = sqrt(C*eps_sgs)
+   diffusion = sqrt(1.3333_WP*tke_sgs*tau_crwi)
  end subroutine get_OU_coefficients
 
   !> Advance the particle equations by a specified time step dt
