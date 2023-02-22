@@ -306,7 +306,7 @@ contains
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,eddyvisc,spatial,SR)
+  subroutine advance(this,dt,U,V,W,rho,visc,eddyvisc,spatial,SR,nux,nuy,nuz)
     use mpi_f08,        only : MPI_SUM,MPI_INTEGER
     use mathtools,      only: Pi
     use random,         only: random_normal
@@ -316,12 +316,15 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nux         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nuy         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nuz         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     logical, intent(in), optional :: spatial
-    integer :: i,j,k,ierr,no
+    integer :: i,j,k,ierr,no,ii,jj,kk
     real(WP), dimension(3) :: b_ij
     real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum,rmydt
     real(WP) :: tmp1,tmp2,tmp3
@@ -454,18 +457,20 @@ contains
                end do
              end block correlate_neighbors
 
+             ii=this%p(i)%ind(1); jj=this%p(i)%ind(2); kk=this%p(i)%ind(3)
              ! Increment OU process - 1st order
-             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*b_ij(1)/corrsum! - &
+             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*b_ij(1)/corrsum + nux(ii,jj,kk)! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
-             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*b_ij(2)/corrsum! - &
+             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*b_ij(2)/corrsum + nuy(ii,jj,kk)! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
-             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*b_ij(3)/corrsum! - &
+             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*b_ij(3)/corrsum + nuz(ii,jj,kk)! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
           else
+             ii=this%p(i)%ind(1); jj=this%p(i)%ind(2); kk=this%p(i)%ind(3)
              this%p(i)%dW = [random_normal(m=0.0_WP,sd=rmydt),random_normal(m=0.0_WP,sd=rmydt),random_normal(m=0.0_WP,sd=rmydt)]
-             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*this%p(i)%dW(1)
-             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*this%p(i)%dW(2)
-             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*this%p(i)%dW(3)
+             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1)  + b_crw*this%p(i)%dW(1)!+ nux(ii,jj,kk)
+             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2)  + b_crw*this%p(i)%dW(2)!+ nuy(ii,jj,kk)
+             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3)  + b_crw*this%p(i)%dW(3)!+ nuz(ii,jj,kk)
           end if
           ! Correct with midpoint rule
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)

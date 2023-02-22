@@ -110,6 +110,7 @@ module incomp_class
       procedure :: adjust_metrics                         !< Adjust metrics
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
+      procedure :: get_viscgrad                           !< Calculate viscosity gradient
       procedure :: get_pgrad                              !< Calculate pressure gradient
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
@@ -1158,6 +1159,29 @@ contains
       call this%cfg%sync(this%div)
    end subroutine get_div
    
+   !> Calculate the eddy visc gradient
+   subroutine get_viscgrad(this,nu,nux,nuy,nuz)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: nu      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: nux     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: nuy     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: nuz     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               nux(i,j,k)=sum(this%divu_x(:,i,j,k)*nu(i-1:i,j,k))
+               nuy(i,j,k)=sum(this%divv_y(:,i,j,k)*nu(i,j-1:j,k))
+               nuz(i,j,k)=sum(this%divw_z(:,i,j,k)*nu(i,j,k-1:k))
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(nux)
+      call this%cfg%sync(nuy)
+      call this%cfg%sync(nuz)
+   end subroutine get_viscgrad
    
    !> Calculate the pressure gradient based on P
    subroutine get_pgrad(this,P,Pgradx,Pgrady,Pgradz)
