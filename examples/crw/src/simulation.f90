@@ -43,14 +43,15 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: nux,nuy,nuz
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,SR2
-   real(WP), dimension(:,:,:,:), allocatable :: SR
+   real(WP), dimension(:,:,:), allocatable :: dtaurdx,dtaurdy,dtaurdz 
+   real(WP), dimension(:,:,:,:), allocatable :: SR,gradusums
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
    
    !> Fluid, forcing, and particle parameters
    real(WP) :: visc,meanU,meanV,meanW
    real(WP) :: Urms0,TKE0,EPS0,Re_max
    real(WP) :: TKE,URMS,sgsTKE,EPSp
-   real(WP) :: stk,tau_eta
+   real(WP) :: stk,tau_eta,tauti
    real(WP) :: meanvisc,Lx,N
    real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
    logical  :: linforce,use_sgs,maxRe,spatial
@@ -59,8 +60,10 @@ module simulation
    !> For monitoring
    real(WP) :: EPS,sgsEPSp,sgsTKEalt
    real(WP) :: Re_L,Re_lambda
-   real(WP) :: eta,ell
+   real(WP) :: eta,ell,cfl
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
+   real(WP) :: fmean,usmean,pvmean
+   real(WP) :: fvar,ftvar,usvar,pvvar
 
    !> Wallclock time for monitoring
    type :: timer
@@ -84,15 +87,19 @@ contains
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(nux(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(nuy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
-         allocate(nuz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(nux (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(nuy (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(nuz (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR2 (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(dtaurdx(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(dtaurdy(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(dtaurdz(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(gradusums(1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
       
       
@@ -177,7 +184,7 @@ contains
          call param_read(tag='Use SGS model',val=use_sgs,default=.false.)
          if (use_sgs) call param_read('SGS model type',sgs_type)
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-         sgs%Cs_ref=0.01_WP
+         sgs%Cs_ref=0.1_WP
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -205,7 +212,8 @@ contains
             Re_max = sqrt(15.0_WP*sqrt(0.6667_WP*TKE0)*0.2_WP*Lx/visc)
             tauinf = 2.0_WP*TKE0/(3.0_WP*EPS0)
             Gdtau = G/tauinf
-            Gdtaui= 1/Gdtau
+            Gdtaui= 1.0_WP/Gdtau
+            tauti = 1.0_WP/tauinf
          else
             TKE0 = 0.0_WP
             tauinf = 99999.0_WP
@@ -339,6 +347,7 @@ contains
          call param_read('Number of particles',np)
          ! Check if spatially correlated
          call param_read('Use SCRW', spatial, default=.false.)
+         call param_read('Correlation function', lp%corr_type)
          ! Check if a stochastic SGS model is used
          if (.false.) then
             call param_read('Restart from',timestamp,'r')
@@ -372,6 +381,10 @@ contains
             end if
             ! Distribute particles
             call lp%sync()
+            ftvar=0.0_WP
+            fvar=0.0_WP
+            pvvar=0.0_WP
+            usvar=0.0_WP
          end if
       end block initialize_lpt
       
@@ -415,7 +428,9 @@ contains
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
-         call fs%get_cfl(time%dt,time%cfl)
+         call lp%get_cfl(time%dt,cfl=time%cfl)
+         call fs%get_cfl(time%dt,cfl)
+         time%cfl=max(time%cfl,cfl)
          call fs%get_max()
          ! Create simulation monitor
          mfile=monitor(fs%cfg%amRoot,'simulation')
@@ -445,6 +460,9 @@ contains
          call cflfile%add_column(fs%CFLv_x,'Viscous xCFL')
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
+         call cflfile%add_column(lp%CFLp_x,'Particle xCFL')
+         call cflfile%add_column(lp%CFLp_y,'Particle yCFL')
+         call cflfile%add_column(lp%CFLp_z,'Particle zCFL')
          call cflfile%write()
          ! Create hit monitor
          hitfile=monitor(fs%cfg%amRoot,'hit')
@@ -486,6 +504,10 @@ contains
          call lptfile%add_column(lp%Wmax,'Particle Wmax')
          call lptfile%add_column(lp%dmin,'Particle dmin')
          call lptfile%add_column(lp%dmax,'Particle dmax')
+         call lptfile%add_column(ftvar, 'fldtot Variance')
+         call lptfile%add_column(fvar,  'fld Variance')
+         call lptfile%add_column(usvar, 'us Variance')
+         call lptfile%add_column(pvvar, 'pvel Variance')
          call lptfile%write()
          ! Create SGS monitor
          sgsfile=monitor(fs%cfg%amroot,'sgs')
@@ -519,15 +541,125 @@ contains
          call tfile%write()
       end block create_monitor
       
-      
+
    end subroutine simulation_init
    
+   !> Compute divergence of SGS stress
+   subroutine compute_divtaur(fs,sgs,dtaudx,dtaudy,dtaudz)
+      implicit none
+      class(incomp), intent(inout)   :: fs
+      class(sgsmodel), intent(inout) :: sgs
+      integer :: i,j,k,ii,jj,kk
+      real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(out) :: dtaudx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(out) :: dtaudy !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(out) :: dtaudz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(:,:,:), allocatable :: taux, tauy, tauz 
+
+      ! Allocate stress arrays
+      allocate(taux(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(tauy(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(tauz(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      
+      do kk=fs%cfg%kmin_,fs%cfg%kmax_+1
+         do jj=fs%cfg%jmin_,fs%cfg%jmax_+1
+            do ii=fs%cfg%imin_,fs%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii-1; j=jj-1; k=kk-1
+               taux(i,j,k)=+sgs%visc(i,j,k)*(sum(fs%grdu_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%grdu_x(:,i,j,k)*fs%U(i:i+1,j,k)) &
+               &         -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               tauy(i,j,k)=+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))*(sum(fs%grdu_y(:,i,j,k)*fs%U(i,j-1:j,k))+sum(fs%grdv_x(:,i,j,k)*fs%V(i-1:i,j,k)))
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               tauz(i,j,k)=+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))*(sum(fs%grdu_z(:,i,j,k)*fs%U(i,j,k-1:k))+sum(fs%grdw_x(:,i,j,k)*fs%W(i-1:i,j,k)))
+            end do
+         end do
+      end do
+
+      ! Divergence of tau - x-comp
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               dtaudx(i,j,k)=sum(fs%divu_x(:,i,j,k)*taux(i-1:i,j,k))+&
+               &             sum(fs%divu_y(:,i,j,k)*tauy(i,j:j+1,k))+&
+               &             sum(fs%divu_z(:,i,j,k)*tauz(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call fs%cfg%sync(dtaudx)
+      
+      do kk=fs%cfg%kmin_,fs%cfg%kmax_+1
+         do jj=fs%cfg%jmin_,fs%cfg%jmax_+1
+            do ii=fs%cfg%imin_,fs%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               taux(i,j,k)=+sum(fs%itp_xy(:,:,i,j,k)*sgs%visc(i-1:i,j-1:j,k))*(sum(fs%grdv_x(:,i,j,k)*fs%V(i-1:i,j,k))+sum(fs%grdu_y(:,i,j,k)*fs%U(i,j-1:j,k)))
+               ! Fluxes on y-face
+               i=ii-1; j=jj-1; k=kk-1
+               tauy(i,j,k)=+sgs%visc(i,j,k)*(sum(fs%grdv_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%grdv_y(:,i,j,k)*fs%V(i,j:j+1,k)) &
+               &         -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               tauz(i,j,k)=+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))*(sum(fs%grdv_z(:,i,j,k)*fs%V(i,j,k-1:k))+sum(fs%grdw_y(:,i,j,k)*fs%W(i,j-1:j,k)))
+            end do
+         end do
+      end do
+
+      ! Divergence of tau - y-comp
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               dtaudy(i,j,k)=sum(fs%divv_x(:,i,j,k)*taux(i-1:i,j,k))+&
+               &             sum(fs%divv_y(:,i,j,k)*tauy(i,j:j+1,k))+&
+               &             sum(fs%divv_z(:,i,j,k)*tauz(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call fs%cfg%sync(dtaudy)
+      
+      do kk=fs%cfg%kmin_,fs%cfg%kmax_+1
+         do jj=fs%cfg%jmin_,fs%cfg%jmax_+1
+            do ii=fs%cfg%imin_,fs%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               taux(i,j,k)=+sum(fs%itp_xz(:,:,i,j,k)*sgs%visc(i-1:i,j,k-1:k))*(sum(fs%grdw_x(:,i,j,k)*fs%W(i-1:i,j,k))+sum(fs%grdu_z(:,i,j,k)*fs%U(i,j,k-1:k)))
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               tauy(i,j,k)=+sum(fs%itp_yz(:,:,i,j,k)*sgs%visc(i,j-1:j,k-1:k))*(sum(fs%grdw_y(:,i,j,k)*fs%W(i,j-1:j,k))+sum(fs%grdv_z(:,i,j,k)*fs%V(i,j,k-1:k)))
+               ! Fluxes on z-face
+               i=ii-1; j=jj-1; k=kk-1
+               tauz(i,j,k)=+sgs%visc(i,j,k)*(sum(fs%grdw_z(:,i,j,k)*fs%W(i,j,k:k+1))+sum(fs%grdw_z(:,i,j,k)*fs%W(i,j,k:k+1)) &
+               &         -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))
+            end do
+         end do
+      end do
+
+      ! Divergence of tau - y-comp
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               dtaudz(i,j,k)=sum(fs%divw_x(:,i,j,k)*taux(i-1:i,j,k))+&
+               &             sum(fs%divw_y(:,i,j,k)*tauy(i,j:j+1,k))+&
+               &             sum(fs%divw_z(:,i,j,k)*tauz(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call fs%cfg%sync(dtaudz)
+
+      deallocate(taux,tauy,tauz)
+      
+   end subroutine compute_divtaur
    
    !> Time integrate our problem
    subroutine simulation_run
       use parallel,       only: parallel_time
       implicit none
       integer :: ii
+      real (WP) :: tmp
       
       ! Perform time integration
       do while (.not.time%done())
@@ -536,14 +668,16 @@ contains
          wt_total%time_in=parallel_time()
          
          ! Increment time
-         call fs%get_cfl(time%dt,time%cfl)
+         call lp%get_cfl(time%dt,cfl=time%cfl)
+         call fs%get_cfl(time%dt,cfl)
+         time%cfl=min(time%cfl,cfl)
          call time%adjust_dt()
          call time%increment()
 
          call fs%get_strainrate(SR=SR)
-         ! should be sqrt(2.0_WP * [...])
          SR2=sqrt(2.0_WP*(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)))
-         
+         ! call fs%cfg%integrate(A=sgs%visc,integral=tmp); tmp=tmp/fs%cfg%vol_total
+         ! print *, tmp
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
@@ -563,12 +697,17 @@ contains
             fs%visc=fs%visc+sgs%visc
          end if
          wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
+
+         gradusums(1,:,:,:) = gradu(1,1,:,:,:) + gradu(1,2,:,:,:) + gradu(1,3,:,:,:)
+         gradusums(2,:,:,:) = gradu(2,1,:,:,:) + gradu(2,2,:,:,:) + gradu(2,3,:,:,:)
+         gradusums(3,:,:,:) = gradu(3,1,:,:,:) + gradu(3,2,:,:,:) + gradu(3,3,:,:,:)
+
+         call compute_divtaur(fs=fs,sgs=sgs,dtaudx=dtaurdx,dtaudy=dtaurdy,dtaudz=dtaurdz)
          
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
-         call fs%get_viscgrad(fs%visc, nux=nux, nuy=nuy, nuz=nuz)
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,SR=SR2,spatial=spatial,nux=nux,nuy=nuy,nuz=nuz)
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,SR=SR2,spatial=spatial,nux=nux,nuy=nuy,nuz=nuz,tauti=tauti,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradus=gradusums)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Perform sub-iterations
@@ -681,6 +820,8 @@ contains
             use parallel, only: MPI_REAL_WP
             real(WP) :: mysgsTKE,myvisc,myTKE,myEPS
             real(WP) :: mysgsEPSp,myEPSp,mysgsTKEalt
+            real(WP) :: myfvar,myusvar,myftvar,mypvvar
+            real(WP), dimension(3) :: myfmean,myusmean,mypvmean,fld
             integer :: i,j,k,ierr
 
             myvisc=0.0_WP; myTKE=0.0_WP; myEPS=0.0_WP
@@ -723,6 +864,35 @@ contains
 
             call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr        ); EPS=EPS/fs%cfg%vol_total
             call MPI_ALLREDUCE(mysgsEPSp,sgsEPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsEPSp=sgsEPSp/fs%cfg%vol_total
+
+            myftvar=0.0_WP; myfvar=0.0_WP; myusvar=0.0_WP; mypvvar=0.0_WP
+            myfmean=0.0_WP; myusmean=0.0_WP; mypvmean=0.0_WP
+
+            ! Particle means
+            do i=1,lp%np_
+               fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+               myfmean  = myfmean  + fld
+               myusmean = myusmean + lp%p(i)%us
+               mypvmean = mypvmean + lp%p(i)%vel
+            end do
+
+            call MPI_ALLREDUCE(myfmean,fmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fmean =fmean/lp%np
+            call MPI_ALLREDUCE(myusmean,usmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usmean=usmean/lp%np
+            call MPI_ALLREDUCE(mypvmean,pvmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvmean=pvmean/lp%np
+
+            ! Particle variance terms
+            do i=1,lp%np_
+               fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+               myftvar = myftvar + dot_product(fld+lp%p(i)%us-fmean-usmean,fld+lp%p(i)%us-fmean-usmean)
+               myfvar  = myfvar  + dot_product(fld-fmean,fld-fmean)
+               myusvar = myusvar + dot_product(lp%p(i)%us-usmean,lp%p(i)%us-usmean)
+               mypvvar = mypvvar + dot_product(lp%p(i)%vel-pvmean,lp%p(i)%vel-pvmean)
+            end do
+
+            call MPI_ALLREDUCE(myftvar,ftvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); ftvar=ftvar/lp%np/3.0_WP
+            call MPI_ALLREDUCE(myfvar,fvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fvar = fvar/lp%np/3.0_WP
+            call MPI_ALLREDUCE(myusvar,usvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usvar=usvar/lp%np/3.0_WP
+            call MPI_ALLREDUCE(mypvvar,pvvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvvar=pvvar/lp%np/3.0_WP
 
             URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
             Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
@@ -818,7 +988,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu,SR2)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu,SR2,dtaurdx,dtaurdy,dtaurdz)
       
    end subroutine simulation_final
    

@@ -61,6 +61,7 @@ module simulation
    real(WP) :: Re_L,Re_lambda
    real(WP) :: eta,ell
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
+   real(WP) :: ftvar,fvar,usvar,pvvar,fmean,pvmean,usmean
 
    !> Wallclock time for monitoring
    type :: timer
@@ -77,6 +78,8 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
       use parallel, only: MPI_REAL_WP
       real(WP) :: myTKE,myEPS
+      real(WP) :: myfvar,myusvar,myftvar,mypvvar
+      real(WP), dimension(3) :: myfmean,myusmean,mypvmean,fld
       integer :: i,j,k,ierr
 
       ! Compute mean velocities
@@ -89,12 +92,10 @@ contains
       call fs%get_gradu(gradu=gradu)
 
       myTKE=0.0_WP; myEPS=0.0_WP
-      mysgsTKE=0.0_WP
 
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
-               mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
                myTKE = myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
                myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
             end do
@@ -102,6 +103,35 @@ contains
       end do
       call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE=TKE/fs%cfg%vol_total
       call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPS=EPS/fs%cfg%vol_total
+
+      myftvar=0.0_WP; myfvar=0.0_WP; myusvar=0.0_WP; mypvvar=0.0_WP
+      myfmean=0.0_WP; myusmean=0.0_WP; mypvmean=0.0_WP
+
+      ! Particle means
+      do i=1,lp%np_
+         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+         myfmean  = myfmean  + fld
+         myusmean = myusmean + lp%p(i)%uf
+         mypvmean = mypvmean + lp%p(i)%vel
+      end do
+
+      call MPI_ALLREDUCE(myfmean,fmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fmean =fmean/lp%np
+      call MPI_ALLREDUCE(myusmean,usmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usmean=usmean/lp%np
+      call MPI_ALLREDUCE(mypvmean,pvmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvmean=pvmean/lp%np
+
+      ! Particle variance terms
+      do i=1,lp%np_
+         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+         myftvar = myftvar + dot_product(fld+lp%p(i)%uf-fmean-usmean,fld+lp%p(i)%uf-fmean-usmean)
+         myfvar  = myfvar  + dot_product(fld-fmean,fld-fmean)
+         myusvar = myusvar + dot_product(lp%p(i)%uf-usmean,lp%p(i)%uf-usmean)
+         mypvvar = mypvvar + dot_product(lp%p(i)%vel-pvmean,lp%p(i)%vel-pvmean)
+      end do
+
+      call MPI_ALLREDUCE(myftvar,ftvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); ftvar=ftvar/lp%np/3.0_WP
+      call MPI_ALLREDUCE(myfvar,fvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fvar = fvar/lp%np/3.0_WP
+      call MPI_ALLREDUCE(myusvar,usvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usvar=usvar/lp%np/3.0_WP
+      call MPI_ALLREDUCE(mypvvar,pvvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvvar=pvvar/lp%np/3.0_WP
 
       URMS = sqrt(2.0_WP/3.0_WP*TKE)
       Re_L = TKE**2.0_WP/EPS/visc
@@ -319,7 +349,7 @@ contains
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
          call param_read('Use CRW', use_crw)
-         if (.false.) then
+         if (.true.) then
             call param_read('Restart from',timestamp,'r')
             ! Read the part file
             call lp%read(filename='restart/part_'//trim(adjustl(timestamp)))
@@ -473,6 +503,10 @@ contains
          call lptfile%add_column(lp%Wmax,'Particle Wmax')
          call lptfile%add_column(lp%dmin,'Particle dmin')
          call lptfile%add_column(lp%dmax,'Particle dmax')
+         call lptfile%add_column(ftvar, 'fldtot Variance')
+         call lptfile%add_column(fvar,  'fld Variance')
+         call lptfile%add_column(usvar, 'us Variance')
+         call lptfile%add_column(pvvar, 'pvel Variance')
          call lptfile%write()
          ! Create SGS monitor
          sgsfile=monitor(fs%cfg%amroot,'sgs')

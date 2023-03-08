@@ -245,30 +245,34 @@ contains
   end function constructor
 
   !> Assigns new random numbers (dim 3) to particles from N~(0,sqrt(dt))
-  subroutine update_dW(this, dt)
+  subroutine update_dW(this, dt, eddyvisc, rho, SR)
     use random, only: random_normal
     implicit none
     class(crw), intent(inout) :: this
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho           !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR            !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), intent(in) :: dt
-    real(WP) :: rdt
+    real(WP) :: rdt, b_crw, a_crw, tauti
     integer :: i
     rdt = sqrt(dt)
     do i=1,this%np_
-       this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-            random_normal(m=0.0_WP,sd=rdt), &
-            random_normal(m=0.0_WP,sd=rdt)]
+       call this%get_OU_coefficients(rho=rho,visc=eddyvisc,p=this%p(i),drift=a_crw,diffusion=b_crw,SR=SR,tauti=tauti)
+       this%p(i)%dW = b_crw * [random_normal(m=0.0_WP,sd=rdt), &
+                               random_normal(m=0.0_WP,sd=rdt), &
+                               random_normal(m=0.0_WP,sd=rdt)]
     end do
   end subroutine update_dW
 
   !> Calculate drift and diffusion coefficients
-  subroutine get_OU_coefficients(this,rho,visc,p,drift,diffusion,SR)
+  subroutine get_OU_coefficients(this,rho,visc,p,drift,diffusion,SR,tauti)
    implicit none
    class(crw), intent(inout) :: this
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    type(part), intent(in) :: p
-   real(WP), intent(out) :: drift,diffusion
+   real(WP), intent(out) :: diffusion,drift,tauti
    real(WP) :: fvisc,frho,tke_sgs,eps_sgs,sig_sg,tau_crwi,fsr
    real(WP) :: delta, C, Cy, Cs
 
@@ -277,57 +281,61 @@ contains
    frho =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho ,bc='d')
    fsr  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=SR  ,bc='d')
 
-   C = 1.5_WP
-   Cy = 0.0022_WP
+   C  = 1.5_WP
+   Cy = 0.005_WP
    Cs = 0.1_WP
 
    delta=this%cfg%min_meshsize
 
    ! Pozorski & Apte (2009) : k_sgs = (nu_eddy / (0.067 * Delta))^2
    ! Marchioli (2017)       : k_sgs = 2*C_y*Delta^2*|S_ij|^2
-   ! - this second one is equivalent to : k_sgs = (nu_e/(C_nu Delta))^2 
+   ! - this second one is equivalent to : k_sgs = (\nu_e/(C_\nu Delta))^2 
 
-   ! =Febe=
-   ! tke_sgs = 2.0_WP*Cy*delta**2*fsr**3
-   ! =Pozorski and Apte=
+   !tke_sgs    = 2.0_WP*Cy*delta**2*fsr**3
+   !eps_sgs    = Cs*delta**2*fsr**3
+   !tau_crwi   = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs 
+
    tke_sgs = (fvisc/frho/delta/0.067_WP)**2 
 
-   ! eps_sgs = Cs*delta**2*fsr**3
-   ! tau_crwi = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs 
-   
    sig_sg = sqrt(0.6666_WP*tke_sgs)
    tau_crwi = sig_sg/delta/C_poz
 
+   tauti = tau_crwi
    drift = tau_crwi
-   ! diffusion = sqrt(C*eps_sgs)
+   !diffusion = sqrt(eps_sgs*C)
    diffusion = sqrt(1.3333_WP*tke_sgs*tau_crwi)
  end subroutine get_OU_coefficients
 
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,eddyvisc,spatial,SR,nux,nuy,nuz)
+  subroutine advance(this,dt,U,V,W,rho,visc,eddyvisc,spatial,SR,nux,nuy,nuz,tauti,dtdx,dtdy,dtdz,gradus)
     use mpi_f08,        only : MPI_SUM,MPI_INTEGER
     use mathtools,      only: Pi
     use random,         only: random_normal
+    use messager,       only: die
     implicit none
     class(crw), intent(inout) :: this
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nux         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nuy         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nuz         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtdx      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtdy      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtdz      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nux       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nuy       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: nuz       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradus
     logical, intent(in), optional :: spatial
-    integer :: i,j,k,ierr,no,ii,jj,kk
+    integer :: i,j,k,ierr,no,ii,jj,kk,iold
     real(WP), dimension(3) :: b_ij
-    real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum,rmydt
-    real(WP) :: tmp1,tmp2,tmp3
+    real(WP) :: mydt,dt_done,deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum,rmydt,tauti
+    real(WP) :: tmp1,tmp2,tmp3,fnx,fny,fnz,taux,tauy,tauz,gux,guy,guz
     real(WP), dimension(3) :: acc,dmom,dW
     integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
     integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
@@ -345,14 +353,13 @@ contains
     if (spatial_) then
 
        ! Share particles across overlap
-       no = max(2,this%cfg%no)
-       no = 2
+       no = this%cfg%no
        call this%share(no)
 
        ! We can now assemble particle-in-cell information
        pic_prep: block
          use mpi_f08
-         integer :: ip,jp,kp
+         integer :: ip,jp,kp,imin,imax
          integer :: mymax_npic,max_npic
 
          ! Allocate number of particle in cell
@@ -389,15 +396,16 @@ contains
 
        end block pic_prep
 
-       call this%update_dW(dt=dt)
+       
     end if
-
+    call this%update_dW(dt=1.0_WP,eddyvisc=eddyvisc,rho=rho,SR=SR)
     ! Advance the equations
     do i=1,this%np_
        ! Avoid particles with id=0
        if (this%p(i)%id.eq.0) cycle
        ! Time-integrate until dt_done=dt
        dt_done=0.0_WP
+       
        do while (dt_done.lt.dt)
           ! Decide the timestep size
           mydt=min(this%p(i)%dt,dt-dt_done)
@@ -408,15 +416,13 @@ contains
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
           this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
-          ! Stochastic update
-          call this%get_OU_coefficients(rho=rho,visc=eddyvisc,p=this%p(i),drift=a_crw,diffusion=b_crw,SR=SR)
 
           if (spatial_) then
              correlate_neighbors: block
                use mathtools, only: Pi,normalize
                integer :: i2,ii,jj,kk,nn
-               real(WP), dimension(3) :: r1,r2
-               real(WP) :: k_n,eta_n,lne,pilne2,rnv,r_influ,delta_n,corr,d12
+               real(WP), dimension(3) :: r1,r2,r12
+               real(WP) :: k_n,eta_n,lne,pilne2,rnv,r_influ,delta_n,corrtp,d12
 
                ! Store particle data
                r1=this%p(i)%pos
@@ -425,11 +431,12 @@ contains
                b_ij    = 0.0_WP
                corrsum = 0.0_WP
 
-               ! Loop over nearest cells
-               do kk=this%p(i)%ind(3)-no,this%p(i)%ind(3)+no
-                  do jj=this%p(i)%ind(2)-no,this%p(i)%ind(2)+no
-                     do ii=this%p(i)%ind(1)-no,this%p(i)%ind(1)+no
-
+               ! do kk=max(this%p(i)%ind(3)-no,this%cfg%kmino_),min(this%p(i)%ind(3)+no,this%cfg%kmaxo_)
+               !    do jj=max(this%p(i)%ind(2)-no,this%cfg%jmino_),min(this%p(i)%ind(2)+no,this%cfg%jmaxo_)
+               !       do ii=max(this%p(i)%ind(1)-no,this%cfg%imino_),min(this%p(i)%ind(1)+no,this%cfg%imaxo_)
+               do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
+                  do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
+                     do ii=this%p(i)%ind(1)-no+1,this%p(i)%ind(1)+no-1
                         ! Loop over particles in that cell
                         do nn=1,npic(ii,jj,kk)  
                            ! Get index of neighbor particle
@@ -446,38 +453,87 @@ contains
                            end if
 
                            ! Compute relative information
-                           d12=norm2(r1-r2)
-                           corr = corr_func(d12)
+                           r12 = r2-r1
+                           if (this%cfg%xper) r12(1) = r12(1) - this%cfg%xL*NINT(r12(1)/this%cfg%xL)
+                           if (this%cfg%yper) r12(2) = r12(2) - this%cfg%yL*NINT(r12(2)/this%cfg%yL)
+                           if (this%cfg%zper) r12(3) = r12(3) - this%cfg%zL*NINT(r12(3)/this%cfg%zL)
 
-                           corrsum = corrsum + corr  
-                           b_ij = b_ij + corr*dW
+                           d12  = norm2(r12)
+                           corrtp = corr_func(d12)
+
+                           if (corrtp.gt.1) call die("[advance] corr > 1")
+                           if (corrtp.lt.0) call die("[advance] corr < 0")
+
+                           corrsum = corrsum + corrtp**2   ! Kernel normalization
+                           b_ij = b_ij + corrtp*dW*rmydt   ! Neighbor correlation 
                         end do
                      end do
                   end do
                end do
              end block correlate_neighbors
+      
+             call this%get_OU_coefficients(rho=rho,visc=eddyvisc,p=this%p(i),drift=a_crw,diffusion=b_crw,SR=SR,tauti=tauti)
 
-             ii=this%p(i)%ind(1); jj=this%p(i)%ind(2); kk=this%p(i)%ind(3)
+             !> Interpolate divergence of SGS stress tensor
+            !  taux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdx,bc='d')
+            !  tauy = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdy,bc='d')
+            !  tauz = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdz,bc='d')
+
+             !> Interpolate velocity gradient
+            !  gux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradus(1,:,:,:),bc='d')
+            !  guy = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradus(2,:,:,:),bc='d')
+            !  guz = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradus(3,:,:,:),bc='d')
+
              ! Increment OU process - 1st order
-             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*b_ij(1)/corrsum + nux(ii,jj,kk)! - &
+             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
-             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*b_ij(2)/corrsum + nuy(ii,jj,kk)! - &
+
+             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
-             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*b_ij(3)/corrsum + nuz(ii,jj,kk)! - &
+
+             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)! - &
              !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
+
+            !  tmp1 = (-sum(this%p(i)%us(:)*gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)! - &
+            !  !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
+
+            !  tmp2 = (-sum(this%p(i)%us(:)*guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)! - &
+            !  !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
+
+            !  tmp3 = (-sum(this%p(i)%us(:)*guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)! - &
+            !  !b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
           else
-             ii=this%p(i)%ind(1); jj=this%p(i)%ind(2); kk=this%p(i)%ind(3)
-             this%p(i)%dW = [random_normal(m=0.0_WP,sd=rmydt),random_normal(m=0.0_WP,sd=rmydt),random_normal(m=0.0_WP,sd=rmydt)]
-             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1)  + b_crw*this%p(i)%dW(1)!+ nux(ii,jj,kk)
-             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2)  + b_crw*this%p(i)%dW(2)!+ nuy(ii,jj,kk)
-             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3)  + b_crw*this%p(i)%dW(3)!+ nuz(ii,jj,kk)
+
+             call this%get_OU_coefficients(rho=rho,visc=eddyvisc,p=this%p(i),drift=a_crw,diffusion=b_crw,SR=SR,tauti=tauti)
+
+             !> Interpolate divergence of SGS stress tensor to particle location
+             !taux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=taurdiv(1,:,:,:),bc='d')
+             !tauy = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=taurdiv(2,:,:,:),bc='d')
+             !tauz = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=taurdiv(3,:,:,:),bc='d')
+             !
+             !gux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(1,:,:,:),bc='d')
+             !guy = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(2,:,:,:),bc='d')
+             !guz = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,:,:,:),bc='d')
+
+             !> Store first stage of RK2 scheme
+             !> Fede model:
+             !> du_s = [ dot(-u_s, grad(u_f)) + div(\tau^r) - u_s/\tau_sg ]*dt + \sigma_sg sqrt(2/\tau_sg)dW
+
+             !tmp1 = (-sum(this%p(i)%us(:)*gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*this%p(i)%dW(1)
+             !tmp2 = (-sum(this%p(i)%us(:)*guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*this%p(i)%dW(2)
+             !tmp3 = (-sum(this%p(i)%us(:)*guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*this%p(i)%dW(3)
+
+             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_crw*dW(1)
+             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_crw*dW(2)
+             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_crw*dW(3)
           end if
+
           ! Correct with midpoint rule
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
           this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
+
           ! Stochastic update
-          call this%get_OU_coefficients(rho=rho,visc=eddyvisc,p=this%p(i),drift=a_crw,diffusion=b_crw,SR=SR)
           this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
           this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
           this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
@@ -538,13 +594,18 @@ contains
          ! case('inferred')
          !    rhoij = inferredcorr(r)
       case(2)
-         rhoij = 1.0_WP - 2.5_WP*r
+         if (r.gt.0.4_WP) then 
+            rhoij=0.0_WP
+         else
+            rhoij = exp(-r/0.22_WP)
+            ! rhoij = 1.0_WP - 2.5_WP*r
+         end if
       case default
          rhoij = 1.0_WP
       end select
 
     end function corr_func
-
+    
   end subroutine advance
 
 
