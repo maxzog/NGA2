@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 6 8
+Partition :	1 6 6
 
 # Mesh definition
 Lx :	6.2832
@@ -10,18 +10,19 @@ Dynamic viscosity :    0.008
 Density :              1
 Linear forcing :       .true.
 
-# Steadt-state (forcing) parameters
+# Steady-state (forcing) parameters
 Steady-state TKE     : 13.5
 Forcing constant (G) : 50.0
 Force to maximum Re_lambda : .false.
 
 # Particle properties
-Particle density :     1000
+Particle density :      1000
 Particle Stokes number :1.0
-Particle diameter : 1.57224E-03
-Number of particles :  75000
-Use SCRW :             .true.
+Particle diameter :     0.007177 #1.57224E-03
+Number of particles :   15000
+Use SCRW :              .false.
 Correlation function :  2
+Interpolate fluid velocity : .false. 
 
 # LES
 Use SGS model : .true.
@@ -33,7 +34,7 @@ Max cfl number :    0.9
 Max iter :          10000
 
 # Ensight output
-Ensight output period : 0.01
+Ensight output period : 0.05
 
 # Restart config
 Restart from : 9.00000E+00

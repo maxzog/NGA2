@@ -61,7 +61,8 @@ module simulation
    real(WP) :: Re_L,Re_lambda
    real(WP) :: eta,ell
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
-   real(WP) :: ftvar,fvar,usvar,pvvar,fmean,pvmean,usmean
+   real(WP) :: ftvar,fvar,usvar,pvvar
+   real(WP), dimension(3) :: fmean,pvmean,usmean
 
    !> Wallclock time for monitoring
    type :: timer
@@ -349,7 +350,7 @@ contains
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
          call param_read('Use CRW', use_crw)
-         if (.true.) then
+         if (.false.) then
             call param_read('Restart from',timestamp,'r')
             ! Read the part file
             call lp%read(filename='restart/part_'//trim(adjustl(timestamp)))
@@ -507,6 +508,7 @@ contains
          call lptfile%add_column(fvar,  'fld Variance')
          call lptfile%add_column(usvar, 'us Variance')
          call lptfile%add_column(pvvar, 'pvel Variance')
+         call lptfile%add_column(pvvar/ftvar,'vel2fld ratio')
          call lptfile%write()
          ! Create SGS monitor
          sgsfile=monitor(fs%cfg%amroot,'sgs')
@@ -548,7 +550,9 @@ contains
       use parallel,       only: parallel_time
       implicit none
       integer :: ii
-      
+      do ii=1,lp%np
+         lp%p(ii)%vel=0.7_WP*lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=Ui,V=Vi,W=Wi)
+      end do 
       ! Perform time integration
       do while (.not.time%done())
 
