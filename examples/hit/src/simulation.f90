@@ -57,7 +57,7 @@ module simulation
    integer  :: sgs_type
 
    !> For monitoring
-   real(WP) :: EPS,sgsEPSp,sgsTKEalt
+   real(WP) :: EPS,sgsEPSp
    real(WP) :: Re_L,Re_lambda
    real(WP) :: eta,ell
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
@@ -298,7 +298,6 @@ contains
 
          call MPI_ALLREDUCE(mysgstke,sgsTKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKE=sgsTKE/fs%cfg%vol_total
          call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE=TKE/fs%cfg%vol_total
-         sgsTKEalt=0.0_WP
 
          call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr        ); EPS=EPS/fs%cfg%vol_total
          call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); EPSp=EPSp/fs%cfg%vol_total
@@ -499,7 +498,6 @@ contains
          call sgsfile%add_column(sgs%max_visc,'Max eddy visc')
          call sgsfile%add_column(sgsEPSp,'sgsEPS')
          call sgsfile%add_column(sgsTKE,'sgsTKE')
-         call sgsfile%add_column(sgsTKEalt,'sgsTKEalt')
          call sgsfile%write()
          ! Create timing monitor
          tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
@@ -681,13 +679,13 @@ contains
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
             use parallel, only: MPI_REAL_WP
             real(WP), dimension(:,:,:), allocatable :: SR2
-            real(WP) :: mysgsTKE,myvisc,myTKE,myEPS,mysgsTKEalt
+            real(WP) :: mysgsTKE,myvisc,myTKE,myEPS
             real(WP) :: mysgsEPSp,myEPSp
             integer :: i,j,k,ierr
 
             myvisc=0.0_WP; myTKE=0.0_WP; myEPS=0.0_WP
-            sgsTKE=0.0_WP; mysgsTKE=0.0_WP; mysgsTKEalt=0.0_WP
-            mysgsEPSp=0.0_WP;sgsTKEalt=0.0_WP
+            sgsTKE=0.0_WP; mysgstke=0.0_WP; 
+            mysgsEPSp=0.0_WP
 
             call fs%get_strainrate(SR=SR)
             call fs%get_gradu(gradu=gradu)
@@ -700,7 +698,6 @@ contains
                   do i=fs%cfg%imin_,fs%cfg%imax_
                      ! LES stats
                      mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
-                     mysgsTKEalt = mysgsTKEalt + fs%cfg%vol(i,j,k)*0.0826_WP*sgs%delta(i,j,k)**2*2.0_WP*SR2(i,j,k)
                      myvisc = myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
 
                      ! Resolved TKE
@@ -721,7 +718,6 @@ contains
             call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
 
             call MPI_ALLREDUCE(mysgstke,sgsTKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKE=sgsTKE/fs%cfg%vol_total
-            call MPI_ALLREDUCE(mysgsTKEalt,sgsTKEalt,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKEalt=sgsTKEalt/fs%cfg%vol_total
             call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE=TKE/fs%cfg%vol_total
 
             call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr        ); EPS=EPS/fs%cfg%vol_total
