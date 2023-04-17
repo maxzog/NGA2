@@ -63,7 +63,8 @@ module simulation
    real(WP) :: eta,ell,cfl
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
    real(WP), dimension(3) :: fmean,usmean,pvmean
-   real(WP) :: fvar,ftvar,usvar,pvvar
+   real(WP) :: fvar,ftvar,usvar,pvvar,varratio
+   real(WP) :: fmean_mean,vmean_mean,umean_mean
 
    !> Wallclock time for monitoring
    type :: timer
@@ -333,7 +334,7 @@ contains
          do i = 1,lp%np_
             pmesh%var(1,i) = lp%p(i)%id
             pmesh%vec(:,1,i) = lp%p(i)%vel
-            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
             pmesh%vec(:,3,i) = lp%p(i)%us 
          end do
       end block create_pmesh
@@ -437,6 +438,10 @@ contains
          call lptfile%add_column(fvar,  'fld Variance')
          call lptfile%add_column(usvar, 'us Variance')
          call lptfile%add_column(pvvar, 'pvel Variance')
+         call lptfile%add_column(varratio, 'vel2fld Variance')
+         call lptfile%add_column(fmean_mean,'fld mean')
+         call lptfile%add_column(vmean_mean,'pvel mean')
+         call lptfile%add_column(umean_mean,'us mean')
          call lptfile%write()
          ! Create SGS monitor
          sgsfile=monitor(fs%cfg%amroot,'sgs')
@@ -592,7 +597,7 @@ contains
                  
       do ii=1,lp%np
       if (fld2vel) then
-         lp%p(ii)%vel=lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=Ui,V=Vi,W=Wi)
+         lp%p(ii)%vel=lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
       end if
       end do
       ! Perform time integration
@@ -632,10 +637,10 @@ contains
          
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
-         resU=fs%rho; resV=fs%visc
+         resU=fs%rho; resV=fs%visc-sgs%visc
          call fs%get_strainrate(SR=SR)
          SR2=sqrt(2.0_WP*(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)))
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradu=gradu,SR=SR2)
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Perform sub-iterations
@@ -751,7 +756,7 @@ contains
             do ii = 1,lp%np_
                pmesh%var(1,ii) = lp%p(ii)%id
                pmesh%vec(:,1,ii) = lp%p(ii)%vel
-               pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=Ui,V=Vi,W=Wi)
+               pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
                pmesh%vec(:,3,ii) = lp%p(ii)%us
             end do
             call ens_out%write_data(time%t)
@@ -862,10 +867,11 @@ contains
                myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
 
                ! Pseudo-dissipation (sgs, resolved, total)
-               mysgsEPSp=mysgsEPSp+fs%cfg%vol(i,j,k)*sgs%visc(i,j,k)*(                 &
-                     &   gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
-                     &   gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
-                     &   gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
+           !    mysgsEPSp=mysgsEPSp+fs%cfg%vol(i,j,k)*sgs%visc(i,j,k)*(                 &
+           !          &   gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
+           !          &   gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
+           !          &   gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
+               mysgsEPSp=mysgsEPSp + fs%cfg%vol(i,j,k)*sgs%Cs_arr(i,j,k)*fs%cfg%min_meshsize**2 * sqrt(SR2(i,j,k))**3
             end do
          end do
       end do
@@ -884,7 +890,7 @@ contains
 
       ! Particle means
       do i=1,lp%np_
-         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
          myfmean  = myfmean  + fld
          myusmean = myusmean + lp%p(i)%us
          mypvmean = mypvmean + lp%p(i)%vel
@@ -896,7 +902,7 @@ contains
 
       ! Particle variance terms
       do i=1,lp%np_
-         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
          myftvar = myftvar + dot_product(fld+lp%p(i)%us-fmean-usmean,fld+lp%p(i)%us-fmean-usmean)
          myfvar  = myfvar  + dot_product(fld-fmean,fld-fmean)
          myusvar = myusvar + dot_product(lp%p(i)%us-usmean,lp%p(i)%us-usmean)
@@ -907,7 +913,12 @@ contains
       call MPI_ALLREDUCE(myfvar,fvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fvar = fvar/lp%np/3.0_WP
       call MPI_ALLREDUCE(myusvar,usvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usvar=usvar/lp%np/3.0_WP
       call MPI_ALLREDUCE(mypvvar,pvvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvvar=pvvar/lp%np/3.0_WP
+      varratio = pvvar/ftvar      
 
+      fmean_mean = sum(fmean)/3.0_WP
+      vmean_mean = sum(pvmean)/3.0_WP
+      umean_mean = sum(usmean)/3.0_WP
+      
       URMS = sqrt(2.0_WP/3.0_WP*(TKE+sgsTKE))
       Re_L = (TKE+sgsTKE)**2.0_WP/EPS/meanvisc 
       Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)

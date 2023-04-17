@@ -14,7 +14,7 @@ module crw_class
   public :: crw
 
   !> Pozorski & Apte (2009) model constant
-  real(WP), public :: C_poz = 0.5_WP
+  real(WP), public :: C_poz = 1.0_WP
 
   !> Memory adaptation parameter
   real(WP), parameter :: coeff_up=1.3_WP      !< Particle array size increase factor
@@ -245,7 +245,7 @@ contains
   end function constructor
 
   !> Assigns product b(x_i)dW_i to particle i
-  subroutine get_diffusion(this, eddyvisc, rho, SR)
+  subroutine get_diffusion(this, eddyvisc, rho, SR, Cs_arr)
    use random, only: random_normal
    implicit none
    class(crw), intent(inout) :: this
@@ -253,29 +253,32 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho           !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR            !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP) :: fvisc,frho,fsr,delta,tke_sgs,sig_sgs,eps_sgs,tau_crwi,b_crw
-   real(WP) :: C,Cy,Cs
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Cs_arr        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP) :: fvisc,frho,fsr,fCs,delta,tke_sgs,sig_sgs,eps_sgs,tau_crwi,b_crw
+   real(WP) :: C,Cy
    integer :: i
    do i=1,this%np_
-      fvisc=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=eddyvisc,bc='d')
-      frho =this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=rho ,bc='d')
+      !fvisc=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=eddyvisc,bc='d')
+      !frho =this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=rho ,bc='d')
       fsr  =this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=SR  ,bc='d')
+      fCs  =this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=Cs_arr  ,bc='d')
       delta=this%cfg%min_meshsize
 
-      C = 1.5_WP
+      C = 2.1_WP
       Cy = 0.0022_WP
-      Cs = 0.1_WP
-
+      ! fCs=0.03_WP
       ! =Febe=
-      tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
-      eps_sgs = Cs*delta**2*fsr**3
+      ! tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
+      !tke_sgs = (fvisc/delta/frho/0.067_WP)**2
+      eps_sgs = fCs*delta**2*fsr**3
+      !eps_sgs = 2.0_WP*tke_sgs**1.5_WP / delta
       b_crw = sqrt(C*eps_sgs)
     
       ! =Pozorski=
-      !tke_sgs = (fvisc/frho/delta/0.067_WP)**2    ! SGS tke
-      !sig_sgs = sqrt(0.6666_WP*tke_sgs)           ! SGS velocity
-      !tau_crwi= sig_sgs/delta/C_poz               ! Inverse SGS timescale
-      !b_crw   = sqrt(1.3333_WP*tke_sgs*tau_crwi)  ! Diffusion coefficient
+      ! tke_sgs = (fvisc/frho/delta/0.067_WP)**2    ! SGS tke
+      ! sig_sgs = sqrt(0.6666_WP*tke_sgs)           ! SGS velocity
+      ! tau_crwi= sig_sgs/delta/C_poz               ! Inverse SGS timescale
+      ! b_crw   = sqrt(1.3333_WP*tke_sgs*tau_crwi)  ! Diffusion coefficient
 
       this%p(i)%dW = b_crw * [random_normal(m=0.0_WP,sd=1.0_WP), &
                               random_normal(m=0.0_WP,sd=1.0_WP), &
@@ -284,7 +287,7 @@ contains
   end subroutine get_diffusion
 
   !> Compute particle drift coefficient
-  subroutine get_drift(this,eddyvisc,rho,SR,p,drift)
+  subroutine get_drift(this,eddyvisc,rho,SR,p,drift,Cs_arr)
    use random, only: random_normal
    implicit none
    type(part), intent(in) :: p
@@ -292,24 +295,27 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho           !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR            !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP) :: fvisc,frho,fsr,delta,tke_sgs,sig_sgs,eps_sgs
-   real(WP) :: C,Cy,Cs
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Cs_arr        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP) :: fvisc,frho,fsr,fCs,delta,tke_sgs,sig_sgs,eps_sgs
+   real(WP) :: C,Cy
    real(WP), intent(out) :: drift
 
    fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=eddyvisc,bc='d')
    frho =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho ,bc='d')
-   ! fsr  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=SR ,bc='d')
+   fsr  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=SR ,bc='d')
+   fCs  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=Cs_arr  ,bc='d')
    delta=this%cfg%min_meshsize
 
-   C = 1.5_WP
+   C = 2.0_WP
    Cy = 0.0022_WP
-   Cs = 0.1_WP
 
    ! =Febe=
-   ! tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
-   ! eps_sgs = Cs*delta**2*fsr**3
-   ! drift = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs
-
+   !tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
+   !tke_sgs = (fvisc/delta/frho/0.067_WP)**2
+   !eps_sgs = fCs*delta**2*fsr**3
+   !eps_sgs = 2.0_WP*tke_sgs**1.5_WP / delta
+   !drift = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs
+   
    ! =Pozorski=
    tke_sgs = (fvisc/frho/delta/0.067_WP)**2     ! SGS tke
    sig_sgs = sqrt(0.6666_WP*tke_sgs)            ! SGS velocity
@@ -319,7 +325,7 @@ contains
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,eddyvisc,spatial,dtdx,dtdy,dtdz,gradu,SR)
+  subroutine advance(this,dt,U,V,W,rho,visc,eddyvisc,spatial,dtdx,dtdy,dtdz,gradu,SR,Cs_arr)
     use mpi_f08,        only : MPI_SUM,MPI_INTEGER
     use mathtools,      only: Pi
     use random,         only: random_normal
@@ -336,6 +342,7 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: eddyvisc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: Cs_arr    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradu
     logical, intent(in), optional :: spatial
@@ -399,7 +406,7 @@ contains
       end block pic_prep
     end if
 
-    call this%get_diffusion(eddyvisc=eddyvisc,rho=rho,SR=SR)
+    call this%get_diffusion(eddyvisc=eddyvisc,rho=rho,SR=SR,Cs_arr=Cs_arr)
     
     ! Advance the equations
     do i=1,this%np_
@@ -460,7 +467,10 @@ contains
                            d12  = norm2(r12)
                            corrtp = corr_func(d12)
 
-                           if (corrtp.gt.1) call die("[advance] corr > 1")
+                           if (corrtp.gt.1.0+epsilon(0.0_WP)) then 
+                              print *, corrtp
+                              call die("[advance] corr > 1")
+                           end if
                            if (corrtp.lt.0) then 
                               print *, corrtp
                               call die("[advance] corr < 0")
@@ -474,7 +484,7 @@ contains
                end do
              end block correlate_neighbors
 
-             call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw)
+             call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw,Cs_arr=Cs_arr)
 
              !> Interpolate divergence of SGS stress tensor to particle location
              taux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdx,bc='d')
@@ -492,13 +502,13 @@ contains
              gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
              gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
              
-             gux = [gu11,gu21,gu31]
-             guy = [gu12,gu22,gu23]
-             guz = [gu13,gu23,gu33]
+             gux = [gu11,gu12,gu13]
+             guy = [gu21,gu22,gu23]
+             guz = [gu31,gu32,gu33]
 
-      !       tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
-      !       tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
-      !       tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)
+             !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
+             !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
+             !tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)
 
              tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
              tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
@@ -506,7 +516,7 @@ contains
 
           else
 
-             call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw)
+             call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw,Cs_arr=Cs_arr)
 
              !> Interpolate divergence of SGS stress tensor to particle location
              taux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdx,bc='d')
@@ -524,9 +534,9 @@ contains
              gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
              gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
              
-             gux = [gu11,gu21,gu31]
-             guy = [gu12,gu22,gu23]
-             guz = [gu13,gu23,gu33]
+             gux = [gu11,gu12,gu13]
+             guy = [gu21,gu22,gu23]
+             guz = [gu31,gu32,gu33]
 
              !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + this%p(i)%dW(1)*rmydt
              !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + this%p(i)%dW(2)*rmydt
@@ -596,16 +606,18 @@ contains
 
     function corr_func(r) result(rhoij)
       real(WP) :: r,rhoij,Rc,sig
-
-      Rc  = 0.4_WP
-      sig = 2.0_WP*0.075_WP**2
+      ! run 1: 0.075
+      ! run 2: 0.12
+      ! run 3: 0.17
+      Rc  = 0.6_WP
+      sig = 2.0_WP*0.17_WP**2
       select case(this%corr_type)
       case(1)
          rhoij = 1.0_WP
          ! case('inferred')
          !    rhoij = inferredcorr(r)
       case(2)
-         if (r.gt.0.3894_WP) then 
+         if (r.gt.0.5894_WP) then 
             rhoij=0.0_WP
          else
             rhoij = (exp(-r**2/sig)-exp(-Rc**2/sig))/(1.0_WP - exp(-Rc**2/sig))

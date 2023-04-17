@@ -61,7 +61,7 @@ module simulation
    real(WP) :: Re_L,Re_lambda
    real(WP) :: eta,ell
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
-   real(WP) :: ftvar,fvar,usvar,pvvar
+   real(WP) :: ftvar,fvar,usvar,pvvar,varratio
    real(WP), dimension(3) :: fmean,pvmean,usmean
 
    !> Wallclock time for monitoring
@@ -110,7 +110,7 @@ contains
 
       ! Particle means
       do i=1,lp%np_
-         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
          myfmean  = myfmean  + fld
          myusmean = myusmean + lp%p(i)%uf
          mypvmean = mypvmean + lp%p(i)%vel
@@ -122,7 +122,7 @@ contains
 
       ! Particle variance terms
       do i=1,lp%np_
-         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
          myftvar = myftvar + dot_product(fld+lp%p(i)%uf-fmean-usmean,fld+lp%p(i)%uf-fmean-usmean)
          myfvar  = myfvar  + dot_product(fld-fmean,fld-fmean)
          myusvar = myusvar + dot_product(lp%p(i)%uf-usmean,lp%p(i)%uf-usmean)
@@ -133,6 +133,7 @@ contains
       call MPI_ALLREDUCE(myfvar,fvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fvar = fvar/lp%np/3.0_WP
       call MPI_ALLREDUCE(myusvar,usvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usvar=usvar/lp%np/3.0_WP
       call MPI_ALLREDUCE(mypvvar,pvvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvvar=pvvar/lp%np/3.0_WP
+      varratio = pvvar/ftvar
 
       URMS = sqrt(2.0_WP/3.0_WP*TKE)
       Re_L = TKE**2.0_WP/EPS/visc
@@ -408,7 +409,7 @@ contains
          do i = 1,lp%np_
             pmesh%var(1,i) = lp%p(i)%id
             pmesh%vec(:,1,i) = lp%p(i)%vel
-            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
+            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
             pmesh%vec(:,3,i) = lp%p(i)%uf 
          end do
       end block create_pmesh
@@ -508,7 +509,7 @@ contains
          call lptfile%add_column(fvar,  'fld Variance')
          call lptfile%add_column(usvar, 'us Variance')
          call lptfile%add_column(pvvar, 'pvel Variance')
-         call lptfile%add_column(pvvar/ftvar,'vel2fld ratio')
+         call lptfile%add_column(varratio,'vel2fld ratio')
          call lptfile%write()
          ! Create SGS monitor
          sgsfile=monitor(fs%cfg%amroot,'sgs')
@@ -551,7 +552,7 @@ contains
       implicit none
       integer :: ii
       do ii=1,lp%np
-         lp%p(ii)%vel=0.7_WP*lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=Ui,V=Vi,W=Wi)
+         lp%p(ii)%vel=0.7_WP*lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
       end do 
       ! Perform time integration
       do while (.not.time%done())
@@ -705,7 +706,7 @@ contains
             do ii = 1,lp%np_
                pmesh%var(1,ii) = lp%p(ii)%id
                pmesh%vec(:,1,ii) = lp%p(ii)%vel
-               pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=Ui,V=Vi,W=Wi)
+               pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
                pmesh%vec(:,3,ii) = lp%p(ii)%uf
             end do
             call ens_out%write_data(time%t)

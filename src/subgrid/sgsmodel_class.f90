@@ -31,6 +31,7 @@ module sgsmodel_class
       ! LM and MM tensor norms and eddy viscosity
       real(WP), dimension(:,:,:), allocatable :: LM,MM          !< LM and MM tensor norms
       real(WP), dimension(:,:,:), allocatable :: visc           !< Turbulent eddy viscosity
+      real(WP), dimension(:,:,:), allocatable :: Cs_arr         !< Smagorinsky coefficient
       
       ! Some information of the fields
       real(WP) :: max_visc                                      !< Maximum eddy viscosity
@@ -246,6 +247,9 @@ contains
       ! Allocate visc
       allocate(self%visc(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc=0.0_WP
       
+      ! Allocate Cs
+      allocate(self%Cs_arr(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%Cs_arr=0.0_WP
+      
       ! Safe loop extents
       self%imin_in=self%cfg%imino_; if (self%cfg%iproc.eq.1           .and..not.self%cfg%xper) self%imin_in=self%cfg%imin
       self%imax_in=self%cfg%imaxo_; if (self%cfg%iproc.eq.self%cfg%npx.and..not.self%cfg%xper) self%imax_in=self%cfg%imax
@@ -413,6 +417,7 @@ contains
                else
                   Cs=0.0_WP
                end if
+               this%Cs_arr(i,j,k)=Cs
                this%visc(i,j,k)=rho(i,j,k)*S_(i,j,k)*Cs*this%delta(i,j,k)**2
             end do
          end do

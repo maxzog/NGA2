@@ -111,6 +111,7 @@ module incomp_class
       procedure :: get_dmomdt                             !< Calculate dmom/dt
       procedure :: get_div                                !< Calculate velocity divergence
       procedure :: get_viscgrad                           !< Calculate viscosity gradient
+      procedure :: get_taurdiv                            !< Calculate divergence of SGS/residual stress tensor
       procedure :: get_pgrad                              !< Calculate pressure gradient
       procedure :: get_cfl                                !< Calculate maximum CFL
       procedure :: get_max                                !< Calculate maximum field values
@@ -1158,7 +1159,40 @@ contains
       ! Sync it
       call this%cfg%sync(this%div)
    end subroutine get_div
-   
+
+   !> Calculate the divergence of the residual/SGS stress tensor
+   !>            (1 4 6)
+   !> tau^r_ij = (4 2 5)
+   !>            (6 5 3)
+   subroutine get_taurdiv(this,tau,taudiv)
+      implicit none
+      class(incomp), intent(inout) :: this
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in)  :: tau      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(out) :: taudiv   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      integer :: i,j,k
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+
+               taudiv(1,i,j,k)=sum(this%divp_x(:,i,j,k)*tau(1,i:i+1,j,k))+&
+               &               sum(this%divp_y(:,i,j,k)*tau(4,i,j:j+1,k))+&
+               &               sum(this%divp_z(:,i,j,k)*tau(6,i,j,k:k+1))
+
+               taudiv(2,i,j,k)=sum(this%divp_x(:,i,j,k)*tau(4,i:i+1,j,k))+&
+               &               sum(this%divp_y(:,i,j,k)*tau(2,i,j:j+1,k))+&
+               &               sum(this%divp_z(:,i,j,k)*tau(5,i,j,k:k+1))
+
+               taudiv(3,i,j,k)=sum(this%divp_x(:,i,j,k)*tau(6,i:i+1,j,k))+&
+               &               sum(this%divp_y(:,i,j,k)*tau(5,i,j:j+1,k))+&
+               &               sum(this%divp_z(:,i,j,k)*tau(3,i,j,k:k+1))
+
+            end do
+         end do
+      end do
+      ! Sync it
+      call this%cfg%sync(taudiv)
+   end subroutine get_taurdiv
+
    !> Calculate the eddy visc gradient
    subroutine get_viscgrad(this,nu,nux,nuy,nuz)
       implicit none
@@ -1171,9 +1205,9 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               nux(i,j,k)=sum(this%divu_x(:,i,j,k)*nu(i-1:i,j,k))
-               nuy(i,j,k)=sum(this%divv_y(:,i,j,k)*nu(i,j-1:j,k))
-               nuz(i,j,k)=sum(this%divw_z(:,i,j,k)*nu(i,j,k-1:k))
+               nux(i,j,k)=sum(this%divp_x(:,i,j,k)*nu(i:i+1,j,k))
+               nuy(i,j,k)=sum(this%divp_y(:,i,j,k)*nu(i,j:j+1,k))
+               nuz(i,j,k)=sum(this%divp_z(:,i,j,k)*nu(i,j,k:k+1))
             end do
          end do
       end do

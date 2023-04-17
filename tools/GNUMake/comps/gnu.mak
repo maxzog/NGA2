@@ -50,10 +50,10 @@ ifeq ($(DEBUG),TRUE)
 
 else
 
-  CXXFLAGS += -O3 -fno-tree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
-  CFLAGS   += -O3 -fno-tree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
-  FFLAGS   += -O3 -fno-tree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
-  F90FLAGS += -O3 -fno-tree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer -pipe -fopenmp
+  CXXFLAGS += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
+  CFLAGS   += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
+  FFLAGS   += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
+  F90FLAGS += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
 
 endif
 

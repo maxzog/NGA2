@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 6 6
+Partition :	1 8 6
 
 # Mesh definition
 Lx :	6.2832
@@ -18,9 +18,9 @@ Force to maximum Re_lambda : .false.
 # Particle properties
 Particle density :      1000
 Particle Stokes number :1.0
-Particle diameter :     0.007177 #1.57224E-03
-Number of particles :   15000
-Use SCRW :              .false.
+Particle diameter :     1.57224E-03 #8.70103E-03 
+Number of particles :   500000
+Use SCRW :              .true.
 Correlation function :  2
 Interpolate fluid velocity : .false. 
 
@@ -34,7 +34,7 @@ Max cfl number :    0.9
 Max iter :          10000
 
 # Ensight output
-Ensight output period : 0.05
+Ensight output period : 0.005
 
 # Restart config
 Restart from : 9.00000E+00
