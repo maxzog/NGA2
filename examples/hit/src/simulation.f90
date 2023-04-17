@@ -53,7 +53,7 @@ module simulation
    real(WP) :: stk,tau_eta
    real(WP) :: meanvisc,Lx,N
    real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
-   logical  :: linforce,use_sgs,maxRe,use_crw
+   logical  :: linforce,use_sgs,maxRe
    integer  :: sgs_type
 
    !> For monitoring
@@ -335,7 +335,6 @@ contains
          ! Get number of particles
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
-         call param_read('Use CRW', use_crw)
          if (restarted) then
             call param_read('Restart from',timestamp,'r')
             ! Read the part file
@@ -356,17 +355,8 @@ contains
                   &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
                   ! Give zero velocity
                   lp%p(i)%vel=0.0_WP
-                  ! OU
-                  lp%p(i)%uf=0.0_WP
-                  if (use_crw) then
-                     lp%p(i)%uf= [random_normal(m=0.0_WP,sd=0.1_WP),& 
-                                  random_normal(m=0.0_WP,sd=0.1_WP),&    
-                                  random_normal(m=0.0_WP,sd=0.1_WP)] 
-                  end if
                   ! Give zero dt
                   lp%p(i)%dt=0.0_WP
-                  lp%p(i)%a_crw=0.0_WP
-                  lp%p(i)%b_crw=0.0_WP
                   ! Locate the particle on the mesh
                   lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
                   ! Activate the particle
@@ -383,18 +373,16 @@ contains
       create_pmesh: block
          integer :: np,i
          call param_read('Number of particles',np)
-         pmesh=partmesh(nvar=1,nvec=3,name='lpt')
+         pmesh=partmesh(nvar=1,nvec=2,name='lpt')
          pmesh%varname(1)="id"
          pmesh%vecname(1)="vel"
          pmesh%vecname(2)="fld"
-         pmesh%vecname(3)="uf"
          call lp%resize(np)
          call lp%update_partmesh(pmesh)
          do i = 1,lp%np_
             pmesh%var(1,i) = lp%p(i)%id
             pmesh%vec(:,1,i) = lp%p(i)%vel
-            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=Ui,V=Vi,W=Wi)
-            pmesh%vec(:,3,i) = lp%p(i)%uf 
+            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
          end do
       end block create_pmesh
       
@@ -546,7 +534,11 @@ contains
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,use_crw=use_crw,sgs=sgs)
+         if (stk.gt.0.0_WP) then
+            call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
+         else
+            call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
+         end if
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Remember old velocity
@@ -690,7 +682,7 @@ contains
             call fs%get_strainrate(SR=SR)
             call fs%get_gradu(gradu=gradu)
 
-            allocate(SR2(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+            allocate(SR2(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
             SR2=SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)
 
             do k=fs%cfg%kmin_,fs%cfg%kmax_
@@ -744,8 +736,7 @@ contains
             do ii = 1,lp%np_
                pmesh%var(1,ii) = lp%p(ii)%id
                pmesh%vec(:,1,ii) = lp%p(ii)%vel
-               pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=Ui,V=Vi,W=Wi)
-               pmesh%vec(:,3,ii) = lp%p(ii)%uf
+               pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
             end do
             call ens_out%write_data(time%t)
          end if
