@@ -51,7 +51,7 @@ module simulation
    real(WP) :: visc,meanU,meanV,meanW
    real(WP) :: Urms0,TKE0,EPS0,Re_max
    real(WP) :: TKE,URMS,sgsTKE,EPSp
-   real(WP) :: stk,tau_eta
+   real(WP) :: stk,tau_eta,dp
    real(WP) :: meanvisc,Lx,N
    real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
    logical  :: linforce,use_sgs,maxRe,fld2vel,spatial
@@ -265,7 +265,6 @@ contains
       ! Initialize LPT solver
       initialize_lpt: block
          use random, only: random_uniform, random_normal
-         real(WP) :: dp
          integer :: i,np
          character(len=str_medium) :: timestamp
          ! Create solver
@@ -640,7 +639,11 @@ contains
          resU=fs%rho; resV=fs%visc-sgs%visc
          call fs%get_strainrate(SR=SR)
          SR2=sqrt(2.0_WP*(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)))
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+         if (dp.gt.0.0_WP) then
+            call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+         else
+            call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+         end if
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Perform sub-iterations

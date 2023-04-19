@@ -553,7 +553,6 @@ contains
          call time%adjust_dt()
          call time%increment()
 
-
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
