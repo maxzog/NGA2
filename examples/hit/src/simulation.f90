@@ -42,7 +42,7 @@ module simulation
    
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
-   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi,Uk,Vk,Wk
    real(WP), dimension(:,:,:,:), allocatable :: SR
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
    
@@ -87,6 +87,9 @@ contains
          allocate(Ui  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Uk  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Vk  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(Wk  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
@@ -516,8 +519,12 @@ contains
    !> Time integrate our problem
    subroutine simulation_run
       use parallel,       only: parallel_time
+      use rfourier_class, only: rfourier
       implicit none
+      class(rfourier), allocatable :: dft
       integer :: ii
+
+      dft=rfourier(fs%cfg)
       
       ! Perform time integration
       do while (.not.time%done())
@@ -586,17 +593,45 @@ contains
                ! Add linear forcing term
                ! See Bassenne et al. (2016)
                linear_forcing: block
-                  use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-                  use parallel, only: MPI_REAL_WP
-                  use messager, only: die
+                  use mpi_f08,        only: MPI_ALLREDUCE,MPI_SUM
+                  use parallel,       only: MPI_REAL_WP
+                  use messager,       only: die
                   real(WP) :: myTKE,A,myvisc,myEPSp
+                  real(WP) :: kx,ky,kz,km,ks,kf
+                  real(WP), dimension(fs%cfg%nx) :: kv
                   integer :: i,j,k,ierr
-   
+                  
+                  kv=0.0_WP
+                  do i=1,fs%cfg%nx/2-1
+                     kv(i) = i-fs%cfg%nx/2
+                  end do
+                  do i=1,fs%cfg%nx/2+1
+                     kv(i+fs%cfg%nx/2-1) = i-1
+                  end do
+
+                  ks=3.0_WP; kf=6.0_WP
+
                   ! Calculate mean velocity
                   call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
                   call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
                   call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
    
+                  Uk=fs%U-meanU; Vk=fs%V-meanV; Wk=fs%W-meanW
+                  ! Uk=Ui-meanU; Vk=Vi-meanV; Wk=Wi-meanW
+                  
+                  ! print *, size(Uk, dim=2)
+                  call dft%xtransform_forward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ytransform_forward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ztransform_forward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+ 
+                  call dft%xtransform_forward(Vk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ytransform_forward(Vk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ztransform_forward(Vk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+
+                  call dft%xtransform_forward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ytransform_forward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ztransform_forward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  
                   ! Calculate TKE and EPS
                   call fs%interp_vel(Ui,Vi,Wi)
                   call fs%get_gradu(gradu=gradu)
@@ -611,18 +646,41 @@ contains
                                     gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
                                     gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
                                     gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
+
+                           kx=kv(i); ky=kv(j); kz=kv(k)
+                           km=sqrt(kx**2+ky**2+kz**2)*fs%cfg%xL/6.2832_WP
+                           if(km.lt.ks.or.km.gt.kf) then
+                              Uk(i,j,k)=0.0_WP; Vk(i,j,k)=0.0_WP; Wk(i,j,k)=0.0_WP
+                           end if
                         end do
                      end do
                   end do
                   call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE = TKE/fs%cfg%vol_total
                   call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr    ); EPSp = EPSp/fs%cfg%vol_total/fs%rho
    
+                  call dft%xtransform_backward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ytransform_backward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ztransform_backward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+ 
+                  call dft%xtransform_backward(Vk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ytransform_backward(Vk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ztransform_backward(Vk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+
+                  call dft%xtransform_backward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ytransform_backward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+                  call dft%ztransform_backward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+
                   if (Gdtaui.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
                   A   = (EPSp - Gdtau*(TKE-TKE0))/(2.0_WP*TKE)*fs%rho ! - Eq. (7) (forcing constant TKE)
    
-                  resU=resU+time%dt*(fs%U-meanU)*A
-                  resV=resV+time%dt*(fs%V-meanV)*A
-                  resW=resW+time%dt*(fs%W-meanW)*A
+                  !resU=resU+time%dt*(fs%U-meanU)*A
+                  !resV=resV+time%dt*(fs%V-meanV)*A
+                  !resW=resW+time%dt*(fs%W-meanW)*A
+                  
+                  resU=resU+time%dt*Uk*A
+                  resV=resV+time%dt*Vk*A
+                  resW=resW+time%dt*Wk*A
+
                end block linear_forcing
             end if
             wt_force%time=wt_force%time+parallel_time()-wt_force%time_in
@@ -808,7 +866,7 @@ contains
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu,Uk,Vk,Wk)
       
    end subroutine simulation_final
    
