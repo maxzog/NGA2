@@ -34,12 +34,6 @@ module lpt_class
      real(WP), dimension(3) :: angVel     !< Angular velocity of particle
      real(WP), dimension(3) :: Acol       !< Collision acceleration
      real(WP), dimension(3) :: Tcol       !< Collision torque
-     real(WP), dimension(3) :: dW         !< Wiener increment
-     real(WP), dimension(3) :: b_ij       !< Neighbor contributions to diffusion
-     real(WP), dimension(3) :: uf         !< Stochastic flucutating fluid velocity seen
-     real(WP) :: corrsum                  !< Sum of correlation coefficient over neighbors
-     real(WP) :: a_crw                    !< OU drift
-     real(WP) :: b_crw                    !< OU diffusion
      real(WP) :: T                        !< Temperature
      real(WP) :: dt                       !< Time step size for the particle
      !> MPI_INTEGER data
@@ -48,7 +42,7 @@ module lpt_class
   end type part
   !> Number of blocks, block length, and block types in a particle
   integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[1,30,4]
+  integer           , dimension(part_nblock) :: part_lblock=[1,18,4]
   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART
@@ -133,7 +127,7 @@ module lpt_class
    contains
      procedure :: update_partmesh                        !< Update a partmesh object using current particles
      procedure :: collide                                !< Evaluate interparticle collision force
-     procedure :: update_dW                              !< Updates random values assigned to particles
+     procedure :: advance_tracer                         !< Advance St=0 particles
      procedure :: advance                                !< Step forward the particle ODEs
      procedure :: get_rhs                                !< Compute rhs of particle odes
      procedure :: resize                                 !< Resize particle array to given size
@@ -586,34 +580,90 @@ contains
     end block collision_force
 
   end subroutine collide
-
-  !> Assigns new random numbers (dim 3) to particles from N~(0,sqrt(dt))
-  subroutine update_dW(this, dt)
-   use random, only: random_normal
-   implicit none
-   class(lpt), intent(inout) :: this
-   real(WP), intent(in) :: dt
-   real(WP) :: rdt
-   integer :: i
-   rdt = sqrt(dt)
-   do i=1,this%np_
-      this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-                      random_normal(m=0.0_WP,sd=rdt), &
-                      random_normal(m=0.0_WP,sd=rdt)]
-   end do
-  end subroutine update_dW
   
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance(this,dt,U,V,W,rho,visc,stress_x,stress_y,stress_z,vortx,vorty,vortz,T,srcU,srcV,srcW,srcE,use_crw,sgs)
+  subroutine advance_tracer(this,dt,U,V,W,rho,visc)
     use mpi_f08,        only : MPI_SUM,MPI_INTEGER
     use mathtools,      only: Pi
-    use sgsmodel_class, only: sgsmodel!, get_sgstke
     use random,         only: random_normal
     implicit none
     class(lpt), intent(inout) :: this
-    class(sgsmodel), intent(in), optional :: sgs
+    real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    integer :: i,j,k,ierr
+    type(part) :: myp,pold
+
+    ! Zero out number of particles removed
+    this%np_out=0
+
+    ! Advance the equations
+    do i=1,this%np_
+       ! Avoid particles with id=0
+       if (this%p(i)%id.eq.0) cycle
+       ! Create local copy of particle
+       myp=this%p(i)
+       ! Remember the particle
+       pold=myp
+       ! Advance with Euler prediction
+       myp%pos=pold%pos+0.5_WP*dt*myp%vel
+       myp%vel=this%cfg%get_velocity(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),U=U,V=V,W=W)
+       myp%pos=pold%pos+dt*myp%vel
+       myp%vel=this%cfg%get_velocity(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),U=U,V=V,W=W)
+       ! Relocalize
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       ! Correct the position to take into account periodicity
+       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       ! Handle particles that have left the domain
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       ! Relocalize the particle
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       ! Count number of particles removed
+       if (myp%flag.eq.1) this%np_out=this%np_out+1
+       ! Copy back to particle
+       if (myp%id.ne.-1) this%p(i)=myp
+    end do
+
+    ! Communicate particles
+    call this%sync()
+
+    ! Sum up particles removed
+    call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+    ! Log/screen output
+    logging: block
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use param,    only: verbose
+      use messager, only: log
+      use string,   only: str_long
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+         if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+         if (verbose.gt.0) call log(message)
+      end if
+    end block logging
+
+  end subroutine advance_tracer
+
+  !> Advance the particle equations by a specified time step dt
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+  subroutine advance(this,dt,U,V,W,rho,visc,stress_x,stress_y,stress_z,vortx,vorty,vortz,T,srcU,srcV,srcW,srcE)
+    use mpi_f08,        only : MPI_SUM,MPI_INTEGER
+    use mathtools,      only: Pi
+    use random,         only: random_normal
+    implicit none
+    class(lpt), intent(inout) :: this
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -631,20 +681,14 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcV   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcW   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: srcE   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    integer :: i,j,k,ierr,no
-    real(WP) :: mydt,dt_done,deng,Ip,rdt,tke,sig_sg,tau_crwi
-    real(WP) :: tmp1,tmp2,tmp3
+    integer :: i,j,k,ierr
+    real(WP) :: mydt,dt_done,deng,Ip
     real(WP), dimension(3) :: acc,torque,dmom
     integer :: iii,jjj,kkk  
     integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
     integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
     real(WP), dimension(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_) :: sx,sy,sz
     type(part) :: myp,pold
-    logical :: spatial
-    logical, intent(in), optional :: use_crw
-
-    rdt = sqrt(dt)
-    spatial = .true.
 
     ! Zero out source term arrays
     if (present(srcU)) srcU=0.0_WP
@@ -672,53 +716,6 @@ contains
     ! Zero out number of particles removed
     this%np_out=0
 
-    if (spatial) then
-      no = 2
-      
-      ! Share particles across overlap
-      call this%share(no)
-      
-      ! We can now assemble particle-in-cell information
-      pic_prep: block
-         use mpi_f08
-         integer :: i,ip,jp,kp,ierr
-         integer :: mymax_npic,max_npic
-         
-         ! Allocate number of particle in cell
-         allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
-         
-         ! Count particles and ghosts per cell
-         do i=1,this%np_
-            ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
-            npic(ip,jp,kp)=npic(ip,jp,kp)+1
-         end do
-         do i=1,this%ng_
-            ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
-            npic(ip,jp,kp)=npic(ip,jp,kp)+1
-         end do
-         
-         ! Get maximum number of particle in cell
-         mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
-         
-         ! Allocate pic map
-         allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
-         
-         ! Assemble pic map
-         npic=0
-         do i=1,this%np_
-            ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
-            npic(ip,jp,kp)=npic(ip,jp,kp)+1
-            ipic(npic(ip,jp,kp),ip,jp,kp)=i
-         end do
-         do i=1,this%ng_
-            ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
-            npic(ip,jp,kp)=npic(ip,jp,kp)+1
-            ipic(npic(ip,jp,kp),ip,jp,kp)=-i
-         end do
-         
-      end block pic_prep
-    end if
-    if (use_crw) call this%update_dW(dt=dt)
     ! Advance the equations
     do i=1,this%np_
        ! Avoid particles with id=0
@@ -735,99 +732,16 @@ contains
           ! Particle moment of inertia per unit mass
           Ip = 0.1_WP*myp%d**2
           ! Advance with Euler prediction
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt,use_crw=use_crw)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
           !if (this%use_lift.and.present(vortx).and.present(vorty).and.present(vortz)) call this%get_lift(vortx,vorty,vortz,acc=acc)
           myp%pos=pold%pos+0.5_WP*mydt*myp%vel
           myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+0.5_WP*mydt*(torque+myp%Tcol)/Ip
-          if (use_crw) then
-            iii = this%p(i)%ind(1)
-            jjj = this%p(i)%ind(2)
-            kkk = this%p(i)%ind(3)
-            tke = 0.1_WP !get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
-            
-            sig_sg = sqrt(0.6666_WP*tke)
-            tau_crwi = sig_sg/sgs%delta(iii,jjj,kkk)/C_poz
-
-            this%p(i)%a_crw = tau_crwi
-            this%p(i)%b_crw = sig_sg*sqrt(2.0_WP*tau_crwi)
-            
-            if (spatial) then
-               correlate_neighbors: block
-                  use mathtools, only: Pi,normalize
-                  integer :: i2,ii,jj,kk,nn
-                  real(WP), dimension(3) :: r1,r2
-                  real(WP) :: k_n,eta_n,lne,pilne2,rnv,r_influ,delta_n,corr,d12
-                     
-                  ! Store particle data
-                  r1=this%p(i)%pos
-                  
-                  ! Zero out neighbor contribution
-                  this%p(i)%b_ij    = 0.0_WP
-                  this%p(i)%corrsum = 0.0_WP
-                  
-                  ! Loop over nearest cells
-                  do kk=this%p(i)%ind(3)-no,this%p(i)%ind(3)+no
-                     do jj=this%p(i)%ind(2)-no,this%p(i)%ind(2)+no
-                        do ii=this%p(i)%ind(1)-no,this%p(i)%ind(1)+no
-                              
-                           ! Loop over particles in that cell
-                           do nn=1,npic(ii,jj,kk)  
-                              ! Get index of neighbor particle
-                              i2=ipic(nn,ii,jj,kk)
-                                 
-                              ! Get relevant data from correct storage
-                              if (i2.gt.0) then
-                                 r2=this%p(i2)%pos
-                              else if (i2.lt.0) then
-                                 i2=-i2
-                                 r2=this%g(i2)%pos
-                              end if
-                                 
-                              ! Compute relative information
-                              d12=norm2(r1-r2)
-                              corr = corr_func(d12)
-
-                              this%p(i)%corrsum = this%p(i)%corrsum + corr  
-                              this%p(i)%b_ij = this%p(i)%b_ij + corr*this%p(i2)%dW
-                              end do
-                           end do
-                        end do
-                     end do
-               end block correlate_neighbors
-
-               ! Increment OU process - 1st order
-               tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%b_ij(1)/this%p(i)%corrsum! - &
-                     !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(1)**2 - mydt) 
-               tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%b_ij(2)/this%p(i)%corrsum! - &
-                     !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(2)**2 - mydt) 
-               tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%b_ij(3)/this%p(i)%corrsum! - &
-                     !this%p(i)%b_crw*0.5_WP*(mydt + epsilon(1.0_WP))**(-0.5_WP)*(this%p(i)%dW(3)**2 - mydt)
-             else
-                this%p(i)%dW = [random_normal(m=0.0_WP,sd=rdt), &
-                                random_normal(m=0.0_WP,sd=rdt), &
-                                random_normal(m=0.0_WP,sd=rdt)]
-                tmp1 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(1) + this%p(i)%b_crw*this%p(i)%dW(1)
-                tmp2 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(2) + this%p(i)%b_crw*this%p(i)%dW(2)
-                tmp3 = (1.0_WP - this%p(i)%a_crw*mydt)*this%p(i)%uf(3) + this%p(i)%b_crw*this%p(i)%dW(3)
-             end if
-          end if
           ! Correct with midpoint rule
-          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt,use_crw=use_crw)
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,stress_x=sx,stress_y=sy,stress_z=sz,p=myp,acc=acc,torque=torque,opt_dt=myp%dt)
           myp%pos=pold%pos+mydt*myp%vel
           myp%vel=pold%vel+mydt*(acc+this%gravity+myp%Acol)
           myp%angVel=pold%angVel+mydt*(torque+myp%Tcol)/Ip
-          if (use_crw) then
-             tke = 0.01_WP! get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
-             sig_sg = sqrt(0.6666_WP*tke)
-             tau_crwi = sig_sg/sgs%delta(iii,jjj,kkk)/C_poz
-             this%p(i)%a_crw = tau_crwi
-             this%p(i)%b_crw = sig_sg*sqrt(2.0_WP*tau_crwi)
-            
-             this%p(i)%uf(1) = tmp1! + this%p(i)%b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
-             this%p(i)%uf(2) = tmp2! + this%p(i)%b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
-             this%p(i)%uf(3) = tmp3! + this%p(i)%b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
-          end if
           ! Relocalize
           myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Send source term back to the mesh
@@ -854,13 +768,6 @@ contains
        if (myp%flag.eq.1) this%np_out=this%np_out+1
        ! Copy back to particle
        if (myp%id.ne.-1) this%p(i)=myp
-       if (use_crw) then
-          tke = 0.01_WP !get_sgstke(visc=sgs%visc(iii,jjj,kkk), delta=sgs%delta(iii,jjj,kkk), rho=rho(iii,jjj,kkk))
-          sig_sg = sqrt(0.6666_WP*tke)
-          tau_crwi = sig_sg/sgs%delta(iii,jjj,kkk)/C_poz
-          this%p(i)%a_crw = tau_crwi
-          this%p(i)%b_crw = sig_sg*sqrt(2.0_WP*tau_crwi)
-       end if
     end do
 
     ! Communicate particles
@@ -900,29 +807,11 @@ contains
       end if
     end block logging
 
-    contains 
-      
-      function corr_func(r) result(rhoij)
-         real(WP) :: r, rhoij
- 
-         select case(trim(this%corr_type))
-         case('exp')
-            rhoij = 1.0_WP
-         ! case('inferred')
-         !    rhoij = inferredcorr(r)
-         case('linear')
-            rhoij = 1.0_WP - 2.5_WP*r
-         case default
-            rhoij = 1.0_WP
-         end select
- 
-       end function corr_func
-
   end subroutine advance
 
 
   !> Calculate RHS of the particle ODEs
-  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,T,p,acc,torque,opt_dt,use_crw)
+  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,T,p,acc,torque,opt_dt)
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -935,7 +824,6 @@ contains
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: T  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     type(part), intent(in) :: p
-    logical, intent(in) :: use_crw
     real(WP), dimension(3), intent(out) :: acc,torque
     real(WP), intent(out) :: opt_dt
     real(WP) :: fvisc,frho,pVF,fVF,fT
@@ -945,9 +833,6 @@ contains
     interpolate: block
       ! Interpolate the fluid phase velocity to the particle location
       fvel=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=U,V=V,W=W)
-      if (use_crw) then
-         fvel=fvel+p%uf
-      end if
       ! Interpolate the fluid phase stress to the particle location
       fstress=this%cfg%get_velocity(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),U=stress_x,V=stress_y,W=stress_z)
       ! Interpolate the fluid phase viscosity to the particle location

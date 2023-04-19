@@ -20,13 +20,19 @@ Force to maximum Re_lambda : .true.
 
 # Particle properties
 Particle density :     1000
+<<<<<<< HEAD
 Particle Stokes number : 1 #30.627
 Number of particles :  0 #500000
+=======
+Particle Stokes number :    0.0
+Number of particles :  1000000 #10000 # 250000
+>>>>>>> develop
 Use CRW :              .false.
 
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
+<<<<<<< HEAD
 Max iter :          15000
 
 # Ensight output
@@ -35,3 +41,14 @@ Ensight output period : 0.2
 # Restart config
 Restart from : #1.49010E+01 #9.90100E+00 # 7.50023E+00
 Restart output period : 0.5
+=======
+Max iter :          12500
+
+# Ensight output
+Ensight output period : 1.0
+
+# Restart config
+Restart sim : .false.
+# Restart from : 1.00044E-02
+Restart output period : 1.0
+>>>>>>> develop
