@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 8 4
+Partition :	1 1 4
 
 # Mesh definition
 Lx :	6.2832
@@ -30,9 +30,9 @@ Max cfl number :    0.9
 Max iter :          12500
 
 # Ensight output
-Ensight output period : 1.0
+Ensight output period : .1
 
 # Restart config
 Restart sim : .false.
-Restart from : 1.10010E+01 # 9.00099E+00 #1.00044E-02
+Restart from : # 1.10010E+01 # 9.00099E+00 #1.00044E-02
 Restart output period : 1.0

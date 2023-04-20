@@ -603,10 +603,10 @@ contains
                   
                   kv=0.0_WP
                   do i=1,fs%cfg%nx/2-1
-                     kv(i) = i-fs%cfg%nx/2
+                     kv(i+fs%cfg%nx/2-1) = i-fs%cfg%nx/2
                   end do
                   do i=1,fs%cfg%nx/2+1
-                     kv(i+fs%cfg%nx/2-1) = i-1
+                     kv(i) = i-1
                   end do
 
                   ks=3.0_WP; kf=6.0_WP
@@ -639,7 +639,7 @@ contains
                   do k=fs%cfg%kmin_,fs%cfg%kmax_
                      do j=fs%cfg%jmin_,fs%cfg%jmax_
                         do i=fs%cfg%imin_,fs%cfg%imax_  
-                           myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+                           !myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
 
                            ! Pseudo-dissipation 
                            myEPSp=myEPSp+fs%cfg%vol(i,j,k)*fs%visc(i,j,k)*(                       &
@@ -651,6 +651,7 @@ contains
                            km=sqrt(kx**2+ky**2+kz**2)*fs%cfg%xL/6.2832_WP
                            if(km.lt.ks.or.km.gt.kf) then
                               Uk(i,j,k)=0.0_WP; Vk(i,j,k)=0.0_WP; Wk(i,j,k)=0.0_WP
+                              myTKE=myTKE+0.5_WP*(Uk(i,j,k)**2+Vk(i,j,k)**2+Wk(i,j,k)**2)*fs%cfg%vol(i,j,k)
                            end if
                         end do
                      end do
@@ -669,6 +670,10 @@ contains
                   call dft%xtransform_backward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
                   call dft%ytransform_backward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
                   call dft%ztransform_backward(Wk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
+
+                  call dft%pg%sync(Uk)
+                  call dft%pg%sync(Vk)
+                  call dft%pg%sync(Wk)
 
                   if (Gdtaui.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
                   A   = (EPSp - Gdtau*(TKE-TKE0))/(2.0_WP*TKE)*fs%rho ! - Eq. (7) (forcing constant TKE)
