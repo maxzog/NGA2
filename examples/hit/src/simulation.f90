@@ -185,6 +185,7 @@ contains
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
          use parallel, only: MPI_REAL_WP
          use mathtools,only: Pi
+         use, intrinsic :: iso_fortran_env, only: output_unit
          integer :: i,j,k
          ! Read in forcing, grid, and initial velocity field parameters
          call param_read('Linear forcing',linforce)
@@ -209,7 +210,12 @@ contains
             TKE0 = 0.0_WP
             tauinf = 99999.0_WP
          end if
-
+         if (fs%cfg%amRoot) then
+            write(output_unit,'("Expected turbulence properties:")')
+            write(output_unit,'("Re_lambda = ",es12.5)') Re_max
+            write(output_unit,'("tau_eddy  = ",es12.5)') tauinf
+            write(output_unit,'("Urms      = ",es12.5)') Urms0
+         end if
          if (restarted) then
             call df%pullvar(name='U',var=fs%U)
             call df%pullvar(name='V',var=fs%V)
@@ -602,14 +608,11 @@ contains
                   integer :: i,j,k,ierr
                   
                   kv=0.0_WP
-                  do i=1,fs%cfg%nx/2-1
-                     kv(i+fs%cfg%nx/2-1) = i-fs%cfg%nx/2
-                  end do
                   do i=1,fs%cfg%nx/2+1
+                     kv(i+fs%cfg%nx/2-1) = i-fs%cfg%nx/2-2
                      kv(i) = i-1
                   end do
-
-                  ks=3.0_WP; kf=6.0_WP
+                  ks=epsilon(0.0_WP); kf=2.0_WP*sqrt(2.0_WP)
 
                   ! Calculate mean velocity
                   call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
@@ -619,7 +622,6 @@ contains
                   Uk=fs%U-meanU; Vk=fs%V-meanV; Wk=fs%W-meanW
                   ! Uk=Ui-meanU; Vk=Vi-meanV; Wk=Wi-meanW
                   
-                  ! print *, size(Uk, dim=2)
                   call dft%xtransform_forward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
                   call dft%ytransform_forward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
                   call dft%ztransform_forward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
@@ -639,7 +641,7 @@ contains
                   do k=fs%cfg%kmin_,fs%cfg%kmax_
                      do j=fs%cfg%jmin_,fs%cfg%jmax_
                         do i=fs%cfg%imin_,fs%cfg%imax_  
-                           !myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
+                           myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
 
                            ! Pseudo-dissipation 
                            myEPSp=myEPSp+fs%cfg%vol(i,j,k)*fs%visc(i,j,k)*(                       &
@@ -651,14 +653,14 @@ contains
                            km=sqrt(kx**2+ky**2+kz**2)*fs%cfg%xL/6.2832_WP
                            if(km.lt.ks.or.km.gt.kf) then
                               Uk(i,j,k)=0.0_WP; Vk(i,j,k)=0.0_WP; Wk(i,j,k)=0.0_WP
-                              myTKE=myTKE+0.5_WP*(Uk(i,j,k)**2+Vk(i,j,k)**2+Wk(i,j,k)**2)*fs%cfg%vol(i,j,k)
                            end if
+                           !myTKE=myTKE+0.5_WP*(Uk(i,j,k)**2+Vk(i,j,k)**2+Wk(i,j,k)**2)!*fs%cfg%vol(i,j,k)
                         end do
                      end do
                   end do
                   call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE = TKE/fs%cfg%vol_total
                   call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr    ); EPSp = EPSp/fs%cfg%vol_total/fs%rho
-   
+                  
                   call dft%xtransform_backward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
                   call dft%ytransform_backward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
                   call dft%ztransform_backward(Uk(fs%cfg%imin_:fs%cfg%imax_,fs%cfg%jmin_:fs%cfg%jmax_,fs%cfg%kmin_:fs%cfg%kmax_))
@@ -674,7 +676,29 @@ contains
                   call dft%pg%sync(Uk)
                   call dft%pg%sync(Vk)
                   call dft%pg%sync(Wk)
+                  
+                !  do k=fs%cfg%kmin_,fs%cfg%kmax_
+                !     do j=fs%cfg%jmin_,fs%cfg%jmax_
+                !        do i=fs%cfg%imin_,fs%cfg%imax_  
+                !           !myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
 
+                !           ! Pseudo-dissipation 
+                !           !myEPSp=myEPSp+fs%cfg%vol(i,j,k)*fs%visc(i,j,k)*(                       &
+                !           !         gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
+                !           !         gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
+                !           !         gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
+
+                !           !kx=kv(i); ky=kv(j); kz=kv(k)
+                !           !km=sqrt(kx**2+ky**2+kz**2)*fs%cfg%xL/6.2832_WP
+                !           !if(km.lt.ks.or.km.gt.kf) then
+                !           !   Uk(i,j,k)=0.0_WP; Vk(i,j,k)=0.0_WP; Wk(i,j,k)=0.0_WP
+                !           !end if
+                !           !myTKE=myTKE+0.5_WP*(Uk(i,j,k)**2+Vk(i,j,k)**2+Wk(i,j,k)**2)*fs%cfg%vol(i,j,k)
+                !        end do
+                !     end do
+                !  end do
+                !  call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE=TKE/fs%cfg%vol_total
+                    
                   if (Gdtaui.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
                   A   = (EPSp - Gdtau*(TKE-TKE0))/(2.0_WP*TKE)*fs%rho ! - Eq. (7) (forcing constant TKE)
    
