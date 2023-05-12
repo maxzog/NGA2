@@ -34,6 +34,7 @@ module lpt_class
      real(WP), dimension(3) :: angVel     !< Angular velocity of particle
      real(WP), dimension(3) :: Acol       !< Collision acceleration
      real(WP), dimension(3) :: Tcol       !< Collision torque
+     real(WP), dimension(3) :: uf         !< temp
      real(WP) :: T                        !< Temperature
      real(WP) :: dt                       !< Time step size for the particle
      !> MPI_INTEGER data
@@ -42,7 +43,7 @@ module lpt_class
   end type part
   !> Number of blocks, block length, and block types in a particle
   integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[1,18,4]
+  integer           , dimension(part_nblock) :: part_lblock=[1,21,4]
   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART

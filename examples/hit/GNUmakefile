@@ -1,5 +1,5 @@
 # NGA location if not yet defined
-NGA_HOME ?= /home/maxzog/NGA2s/nga2restart/
+NGA_HOME ?= /Users/maxzog/NGA2/
 
 # Compilation parameters
 PRECISION = DOUBLE
@@ -23,9 +23,9 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-LAPACK_DIR= /usr/lapack/#/usr/local/Cellar/lapack/3.11
-HYPRE_DIR = /opt/libs/hypre/#/Users/maxzog/builds/hypre/src/hypre
-FFTW_DIR  = /opt/libs/fftw3/#/usr/local/Cellar/fftw/3.3.10_1
+LAPACK_DIR=/usr/local/Cellar/lapack/3.11
+HYPRE_DIR =/Users/maxzog/builds/hypre/src/hypre
+FFTW_DIR  =/usr/local/Cellar/fftw/3.3.10_1
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs

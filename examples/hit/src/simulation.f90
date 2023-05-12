@@ -373,6 +373,8 @@ contains
                   lp%p(i)%vel=0.0_WP
                   ! Give zero dt
                   lp%p(i)%dt=0.0_WP
+                  ! temp
+                  lp%p(i)%uf=0.0_WP
                   ! Locate the particle on the mesh
                   lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
                   ! Activate the particle
