@@ -534,13 +534,13 @@ contains
          guy = [gu21,gu22,gu23]
          guz = [gu31,gu32,gu33]
 
-         !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
-         !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
-         !tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
+         tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
 
-         tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
-         tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
-         tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
+         !tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         !tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         !tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
       end if
       this%p(i)%pos=pold%pos+dt*this%p(i)%vel
       this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W) + this%p(i)%us
@@ -832,13 +832,13 @@ contains
              guy = [gu21,gu22,gu23]
              guz = [gu31,gu32,gu33]
 
-             !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + this%p(i)%dW(1)*rmydt
-             !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + this%p(i)%dW(2)*rmydt
-             !tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + this%p(i)%dW(3)*rmydt
+             tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + this%p(i)%dW(1)*rmydt
+             tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + this%p(i)%dW(2)*rmydt
+             tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + this%p(i)%dW(3)*rmydt
 
-             tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + this%p(i)%dW(1)*rmydt
-             tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + this%p(i)%dW(2)*rmydt
-             tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + this%p(i)%dW(3)*rmydt
+             !tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + this%p(i)%dW(1)*rmydt
+             !tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + this%p(i)%dW(2)*rmydt
+             !tmp3 = (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + this%p(i)%dW(3)*rmydt
           end if
 
           ! Correct with midpoint rule
