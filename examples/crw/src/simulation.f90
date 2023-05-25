@@ -477,6 +477,116 @@ contains
 
    end subroutine simulation_init
    
+   !> Compute RHS of N-S w/o advection
+   subroutine compute_nsrhs(fs,sgs,dtaudx,dtaudy,dtaudz)
+      implicit none
+      class(incomp),   intent(inout)   :: fs
+      class(sgsmodel), intent(inout)   :: sgs
+      integer :: i,j,k,ii,jj,kk
+      real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(out) :: dtaudx !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(out) :: dtaudy !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(fs%cfg%imino_:,fs%cfg%jmino_:,fs%cfg%kmino_:), intent(out) :: dtaudz !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+      real(WP), dimension(:,:,:), allocatable :: taux, tauy, tauz 
+
+      ! Allocate stress arrays
+      allocate(taux(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(tauy(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      allocate(tauz(fs%cfg%imino_:fs%cfg%imaxo_,fs%cfg%jmino_:fs%cfg%jmaxo_,fs%cfg%kmino_:fs%cfg%kmaxo_))
+      
+      do kk=fs%cfg%kmin_,fs%cfg%kmax_+1
+         do jj=fs%cfg%jmin_,fs%cfg%jmax_+1
+            do ii=fs%cfg%imin_,fs%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii-1; j=jj-1; k=kk-1
+               taux(i,j,k)=+(fs%visc(i,j,k)-sgs%visc(i,j,k))*(sum(fs%grdu_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%grdu_x(:,i,j,k)*fs%U(i:i+1,j,k)) &
+               & -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1)))) + fs%P(i,j,k)
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               tauy(i,j,k)=+sum(fs%itp_xy(:,:,i,j,k)*(fs%visc(i-1:i,j-1:j,k)-sgs%visc(i-1:i,j-1:j,k)))*(sum(fs%grdu_y(:,i,j,k)*fs%U(i,j-1:j,k))+sum(fs%grdv_x(:,i,j,k)*fs%V(i-1:i,j,k)))
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               tauz(i,j,k)=+sum(fs%itp_xz(:,:,i,j,k)*(fs%visc(i-1:i,j,k-1:k)-sgs%visc(i-1:i,j,k-1:k)))*(sum(fs%grdu_z(:,i,j,k)*fs%U(i,j,k-1:k))+sum(fs%grdw_x(:,i,j,k)*fs%W(i-1:i,j,k)))
+            end do
+         end do
+      end do
+
+      ! Divergence of tau - x-comp
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               dtaudx(i,j,k)=sum(fs%divu_x(:,i,j,k)*taux(i-1:i,j,k))+&
+               &             sum(fs%divu_y(:,i,j,k)*tauy(i,j:j+1,k))+&
+               &             sum(fs%divu_z(:,i,j,k)*tauz(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call fs%cfg%sync(dtaudx)
+      
+      do kk=fs%cfg%kmin_,fs%cfg%kmax_+1
+         do jj=fs%cfg%jmin_,fs%cfg%jmax_+1
+            do ii=fs%cfg%imin_,fs%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               taux(i,j,k)=+sum(fs%itp_xy(:,:,i,j,k)*(fs%visc(i-1:i,j-1:j,k)-sgs%visc(i-1:i,j-1:j,k)))*(sum(fs%grdv_x(:,i,j,k)*fs%V(i-1:i,j,k))+sum(fs%grdu_y(:,i,j,k)*fs%U(i,j-1:j,k)))
+               ! Fluxes on y-face
+               i=ii-1; j=jj-1; k=kk-1
+               tauy(i,j,k)=+(fs%visc(i,j,k)-sgs%visc(i,j,k))*(sum(fs%grdv_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%grdv_y(:,i,j,k)*fs%V(i,j:j+1,k)) &
+               & -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))  + fs%P(i,j,k)
+               ! Fluxes on z-face
+               i=ii; j=jj; k=kk
+               tauz(i,j,k)=+sum(fs%itp_yz(:,:,i,j,k)*(fs%visc(i,j-1:j,k-1:k)-sgs%visc(i,j-1:j,k-1:k)))*(sum(fs%grdv_z(:,i,j,k)*fs%V(i,j,k-1:k))+sum(fs%grdw_y(:,i,j,k)*fs%W(i,j-1:j,k)))
+            end do
+         end do
+      end do
+
+      ! Divergence of tau - y-comp
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               dtaudy(i,j,k)=sum(fs%divv_x(:,i,j,k)*taux(i-1:i,j,k))+&
+               &             sum(fs%divv_y(:,i,j,k)*tauy(i,j:j+1,k))+&
+               &             sum(fs%divv_z(:,i,j,k)*tauz(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call fs%cfg%sync(dtaudy)
+      
+      do kk=fs%cfg%kmin_,fs%cfg%kmax_+1
+         do jj=fs%cfg%jmin_,fs%cfg%jmax_+1
+            do ii=fs%cfg%imin_,fs%cfg%imax_+1
+               ! Fluxes on x-face
+               i=ii; j=jj; k=kk
+               taux(i,j,k)=+sum(fs%itp_xz(:,:,i,j,k)*(fs%visc(i-1:i,j,k-1:k)-sgs%visc(i-1:i,j,k-1:k)))*(sum(fs%grdw_x(:,i,j,k)*fs%W(i-1:i,j,k))+sum(fs%grdu_z(:,i,j,k)*fs%U(i,j,k-1:k)))
+               ! Fluxes on y-face
+               i=ii; j=jj; k=kk
+               tauy(i,j,k)=+sum(fs%itp_yz(:,:,i,j,k)*(fs%visc(i,j-1:j,k-1:k)-sgs%visc(i,j-1:j,k-1:k)))*(sum(fs%grdw_y(:,i,j,k)*fs%W(i,j-1:j,k))+sum(fs%grdv_z(:,i,j,k)*fs%V(i,j,k-1:k)))
+               ! Fluxes on z-face
+               i=ii-1; j=jj-1; k=kk-1
+               tauz(i,j,k)=+(fs%visc(i,j,k)-sgs%visc(i,j,k))*(sum(fs%grdw_z(:,i,j,k)*fs%W(i,j,k:k+1))+sum(fs%grdw_z(:,i,j,k)*fs%W(i,j,k:k+1)) &
+               & -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1)))) + fs%P(i,j,k)  
+            end do
+         end do
+      end do
+
+      ! Divergence of tau - y-comp
+      do k=fs%cfg%kmin_,fs%cfg%kmax_
+         do j=fs%cfg%jmin_,fs%cfg%jmax_
+            do i=fs%cfg%imin_,fs%cfg%imax_
+               dtaudz(i,j,k)=sum(fs%divw_x(:,i,j,k)*taux(i-1:i,j,k))+&
+               &             sum(fs%divw_y(:,i,j,k)*tauy(i,j:j+1,k))+&
+               &             sum(fs%divw_z(:,i,j,k)*tauz(i,j,k:k+1))
+            end do
+         end do
+      end do
+      ! Sync it
+      call fs%cfg%sync(dtaudz)
+
+      deallocate(taux,tauy,tauz)
+      
+   end subroutine compute_nsrhs
+
    !> Compute divergence of SGS stress
    subroutine compute_divtaur(fs,dtaudx,dtaudy,dtaudz)
       implicit none
@@ -498,7 +608,7 @@ contains
                ! Fluxes on x-face
                i=ii-1; j=jj-1; k=kk-1
                taux(i,j,k)=+fs%visc(i,j,k)*(sum(fs%grdu_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%grdu_x(:,i,j,k)*fs%U(i:i+1,j,k)) &
-               &         -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))
+               &-2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))-fs%P(i,j,k)
                ! Fluxes on y-face
                i=ii; j=jj; k=kk
                tauy(i,j,k)=+sum(fs%itp_xy(:,:,i,j,k)*fs%visc(i-1:i,j-1:j,k))*(sum(fs%grdu_y(:,i,j,k)*fs%U(i,j-1:j,k))+sum(fs%grdv_x(:,i,j,k)*fs%V(i-1:i,j,k)))
@@ -531,7 +641,7 @@ contains
                ! Fluxes on y-face
                i=ii-1; j=jj-1; k=kk-1
                tauy(i,j,k)=+fs%visc(i,j,k)*(sum(fs%grdv_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%grdv_y(:,i,j,k)*fs%V(i,j:j+1,k)) &
-               &         -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))
+               &-2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))-fs%P(i,j,k)
                ! Fluxes on z-face
                i=ii; j=jj; k=kk
                tauz(i,j,k)=+sum(fs%itp_yz(:,:,i,j,k)*fs%visc(i,j-1:j,k-1:k))*(sum(fs%grdv_z(:,i,j,k)*fs%V(i,j,k-1:k))+sum(fs%grdw_y(:,i,j,k)*fs%W(i,j-1:j,k)))
@@ -564,7 +674,7 @@ contains
                ! Fluxes on z-face
                i=ii-1; j=jj-1; k=kk-1
                tauz(i,j,k)=+fs%visc(i,j,k)*(sum(fs%grdw_z(:,i,j,k)*fs%W(i,j,k:k+1))+sum(fs%grdw_z(:,i,j,k)*fs%W(i,j,k:k+1)) &
-               &         -2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))
+               &-2.0_WP/3.0_WP*(sum(fs%divp_x(:,i,j,k)*fs%U(i:i+1,j,k))+sum(fs%divp_y(:,i,j,k)*fs%V(i,j:j+1,k))+sum(fs%divp_z(:,i,j,k)*fs%W(i,j,k:k+1))))-fs%P(i,j,k)
             end do
          end do
       end do
@@ -631,17 +741,25 @@ contains
          end if
          wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
 
-         call compute_divtaur(fs=fs,dtaudx=dtaurdx,dtaudy=dtaurdy,dtaudz=dtaurdz)
+         ! call compute_divtaur(fs=fs,dtaudx=dtaurdx,dtaudy=dtaurdy,dtaudz=dtaurdz)
+         call compute_nsrhs(fs=fs,sgs=sgs,dtaudx=dtaurdx,dtaudy=dtaurdy,dtaudz=dtaurdz)
          
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc-sgs%visc
          call fs%get_strainrate(SR=SR)
-         SR2=sqrt(2.0_WP*(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)))
+         SR2=sqrt(2.0_WP*(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2 + &
+                 2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)))
          if (dp.gt.0.0_WP) then
-            call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+            call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU, &
+                    visc=resV,eddyvisc=sgs%visc,spatial=spatial,      &
+                    dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,           &
+                    gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
          else
-            call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,eddyvisc=sgs%visc,spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+            call lp%advance_tracer_inst(dt=time%dt,U=fs%U,V=fs%V,W=fs%W, &
+                    rho=resU,visc=resV,eddyvisc=sgs%visc,           &
+                    spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,      &
+                    dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
          end if
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
