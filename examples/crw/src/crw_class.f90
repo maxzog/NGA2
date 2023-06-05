@@ -308,7 +308,7 @@ contains
    fsr  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=SR ,bc='d')
    fCs  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=Cs_arr  ,bc='d')
    delta=this%cfg%min_meshsize
-
+   
    C = 2.1_WP
    Cy = 0.0022_WP
 
@@ -502,9 +502,9 @@ contains
          gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
          gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
          
-         gux = [gu11,gu12,gu13]
-         guy = [gu21,gu22,gu23]
-         guz = [gu31,gu32,gu33]
+         gux = [gu11,gu21,gu31]
+         guy = [gu12,gu22,gu32]
+         guz = [gu13,gu23,gu33]
 
          !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
          !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
@@ -535,9 +535,9 @@ contains
          gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
          gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
          
-         gux = [gu11,gu12,gu13]
-         guy = [gu21,gu22,gu23]
-         guz = [gu31,gu32,gu33]
+         gux = [gu11,gu21,gu31]
+         guy = [gu12,gu22,gu32]
+         guz = [gu13,gu23,gu33]
          fld = this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
 
          tmp1 = this%p(i)%us(1) + tau(1)*dt - (this%p(i)%us(1)-fld(1))*a_crw*dt + this%p(i)%dW(1)*rdt
@@ -797,9 +797,9 @@ contains
          gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
          gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
          
-         gux = [gu11,gu12,gu13]
-         guy = [gu21,gu22,gu23]
-         guz = [gu31,gu32,gu33]
+         gux = [gu11,gu21,gu31]
+         guy = [gu12,gu22,gu32]
+         guz = [gu13,gu23,gu33]
 
          !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
          !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
@@ -827,17 +827,17 @@ contains
          gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
          gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
          
-         gux = [gu11,gu12,gu13]
-         guy = [gu21,gu22,gu23]
-         guz = [gu31,gu32,gu33]
+         gux = [gu11,gu21,gu31]
+         guy = [gu12,gu22,gu32]
+         guz = [gu13,gu23,gu33]
 
-         tmp1 = (-dot_product(this%p(i)%us(:),gux) + tau(1))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
-         tmp2 = (-dot_product(this%p(i)%us(:),guy) + tau(2))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
-         tmp3 = (-dot_product(this%p(i)%us(:),guz) + tau(3))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
+         !tmp1 = (-dot_product(this%p(i)%us(:),gux) + tau(1))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tau(2))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         !tmp3 = (-dot_product(this%p(i)%us(:),guz) + tau(3))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
 
-         !tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
-         !tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
-         !tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
+         tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
       end if
       this%p(i)%pos=pold%pos+dt*this%p(i)%vel
       this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W) + this%p(i)%us
@@ -1094,9 +1094,9 @@ contains
              gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
              gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
              
-             gux = [gu11,gu12,gu13]
-             guy = [gu21,gu22,gu23]
-             guz = [gu31,gu32,gu33]
+             gux = [gu11,gu21,gu31]
+             guy = [gu12,gu22,gu32]
+             guz = [gu13,gu23,gu33]
 
              !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
              !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
@@ -1128,9 +1128,9 @@ contains
              gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
              gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
              
-             gux = [gu11,gu12,gu13]
-             guy = [gu21,gu22,gu23]
-             guz = [gu31,gu32,gu33]
+             gux = [gu11,gu21,gu31]
+             guy = [gu12,gu22,gu32]
+             guz = [gu13,gu23,gu33]
              fld = this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
 
              tmp1 = this%p(i)%us(1) + tau(1)*dt - (this%p(i)%us(1)-fld(1))*a_crw*dt + this%p(i)%dW(1)*rdt
@@ -1405,9 +1405,9 @@ contains
              gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
              gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
              
-             gux = [gu11,gu12,gu13]
-             guy = [gu21,gu22,gu23]
-             guz = [gu31,gu32,gu33]
+             gux = [gu11,gu21,gu31]
+             guy = [gu12,gu22,gu32]
+             guz = [gu13,gu23,gu33]
 
              !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
              !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
@@ -1435,9 +1435,9 @@ contains
              gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
              gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
              
-             gux = [gu11,gu12,gu13]
-             guy = [gu21,gu22,gu23]
-             guz = [gu31,gu32,gu33]
+             gux = [gu11,gu21,gu31]
+             guy = [gu12,gu22,gu32]
+             guz = [gu13,gu23,gu33]
 
              tmp1 = (-dot_product(this%p(i)%us(:),gux) + tau(1))*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + this%p(i)%dW(1)*rmydt
              tmp2 = (-dot_product(this%p(i)%us(:),guy) + tau(2))*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + this%p(i)%dW(2)*rmydt

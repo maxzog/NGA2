@@ -64,7 +64,7 @@ module simulation
    real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
    real(WP), dimension(3) :: fmean,usmean,pvmean
    real(WP) :: fvar,ftvar,usvar,pvvar,varratio
-   real(WP) :: fmean_mean,vmean_mean,umean_mean
+   real(WP) :: fmean_mean,vmean_mean,umean_mean,gumean
 
    !> Wallclock time for monitoring
    type :: timer
@@ -407,6 +407,7 @@ contains
          call hitfile%add_column(URMS,'URMS')
          call hitfile%add_column(EPS,'EPS')
          call hitfile%add_column(ell,'Integral lengthscale')
+         call hitfile%add_column(gumean,'Mean gradU')
          call hitfile%write()
          ! Create hit convergence monitor
          ssfile=monitor(fs%cfg%amRoot,'convergence')
@@ -756,7 +757,7 @@ contains
                     dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,           &
                     gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
          else
-            call lp%advance_tracer_inst(dt=time%dt,U=fs%U,V=fs%V,W=fs%W, &
+            call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W, &
                     rho=resU,visc=resV,eddyvisc=sgs%visc,           &
                     spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,      &
                     dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
@@ -959,7 +960,7 @@ contains
       use parallel, only: MPI_REAL_WP
       real(WP) :: mysgsTKE,myvisc,myTKE,myEPS
       real(WP) :: mysgsEPSp,myEPSp,mysgsTKEalt
-      real(WP) :: myfvar,myusvar,myftvar,mypvvar
+      real(WP) :: myfvar,myusvar,myftvar,mypvvar,mygumean
       real(WP), dimension(3) :: myfmean,myusmean,mypvmean,fld
       integer :: i,j,k,ierr
 
@@ -975,6 +976,9 @@ contains
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
+               mygumean = mygumean + (gradu(1,1,i,j,k) + gradu(1,2,i,j,k) + gradu(1,3,i,j,k) + &
+                     &                gradu(2,1,i,j,k) + gradu(2,2,i,j,k) + gradu(2,3,i,j,k) + & 
+                     &                gradu(3,1,i,j,k) + gradu(3,2,i,j,k) + gradu(3,3,i,j,k))*fs%cfg%vol(i,j,k)
                ! LES stats
                mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
                mysgsTKEalt = mysgsTKEalt + fs%cfg%vol(i,j,k)*0.0826_WP*sgs%delta(i,j,k)**2*2.0_WP*SR2(i,j,k)
@@ -996,6 +1000,7 @@ contains
          end do
       end do
 
+      call MPI_ALLREDUCE(mygumean,gumean,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); gumean=gumean/fs%cfg%vol_total
       call MPI_ALLREDUCE(myvisc,meanvisc,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanvisc=meanvisc/fs%cfg%vol_total
 
       call MPI_ALLREDUCE(mysgstke,sgsTKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); sgsTKE=sgsTKE/fs%cfg%vol_total
