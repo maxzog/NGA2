@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 1 4
+Partition :	1 8 4
 
 # Mesh definition
 Lx :	6.2832
@@ -17,9 +17,9 @@ Force to maximum Re_lambda : .false.
 
 # Particle properties
 Particle density :      1000
-Particle Stokes number :0.0 #1.0
-Particle diameter :     0.0 #1.57224E-03 #8.70103E-03 
-Number of particles :   15000
+Particle Stokes number :1.0 #1.0
+Particle diameter :      1.57224E-03 #8.70103E-03 
+Number of particles :   50000
 Use SCRW :              .false.
 Correlation function :  2
 Interpolate fluid velocity : .false. 
@@ -31,11 +31,11 @@ SGS model type : 1
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
-Max iter :          10000
+Max iter :          12500
 
 # Ensight output
 Ensight output period : 0.005
 
 # Restart config
-Restart from : 5.00000E+00
+Restart from : 9.00000E+00
 Restart output period : 1.0
