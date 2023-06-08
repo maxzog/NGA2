@@ -744,6 +744,7 @@ contains
 
          call compute_divtaur(fs=fs,dtaudx=dtaurdx,dtaudy=dtaurdy,dtaudz=dtaurdz)
          ! call compute_nsrhs(fs=fs,sgs=sgs,dtaudx=dtaurdx,dtaudy=dtaurdy,dtaudz=dtaurdz)
+         ! call fs%get_pgrad(fs%psolv%sol,dtaurdx,dtaurdy,dtaurdz)
          
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
@@ -982,7 +983,7 @@ contains
                ! LES stats
                mysgsTKE = mysgsTKE + fs%cfg%vol(i,j,k)*(sgs%visc(i,j,k)/0.067_WP/sgs%delta(i,j,k)/fs%rho)**2
                mysgsTKEalt = mysgsTKEalt + fs%cfg%vol(i,j,k)*0.0826_WP*sgs%delta(i,j,k)**2*2.0_WP*SR2(i,j,k)
-               myvisc = myvisc+fs%visc(i,j,k)*fs%cfg%vol(i,j,k)
+               myvisc = myvisc+(fs%visc(i,j,k)-visc)*fs%cfg%vol(i,j,k)
 
                ! Resolved TKE
                myTKE = myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)

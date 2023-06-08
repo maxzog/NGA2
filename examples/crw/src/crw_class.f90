@@ -267,15 +267,15 @@ contains
       fCs  =this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=Cs_arr  ,bc='d')
       delta=this%cfg%min_meshsize
 
-      C = 2.1_WP
+      C = 1.5_WP
       Cy = 0.0022_WP
       ! fCs=0.03_WP
       ! =Febe=
-      !tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
-      !tke_sgs = (fvisc/delta/frho/0.067_WP)**2
-  !    eps_sgs = fCs*delta**2*fsr**3
-!      eps_sgs = 2.0_WP*tke_sgs**1.5_WP / delta
-   !   b_crw = sqrt(C*eps_sgs)
+      ! tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
+      ! ! tke_sgs = (fvisc/delta/frho/0.067_WP)**2
+      ! eps_sgs = fCs*delta**2*fsr**3
+      ! ! eps_sgs = 2.0_WP*tke_sgs**1.5_WP / delta
+      ! b_crw = sqrt(C*eps_sgs)
     
       ! =Pozorski=
       tke_sgs = (fvisc/frho/delta/0.067_WP)**2    ! SGS tke
@@ -309,15 +309,15 @@ contains
    fCs  =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=Cs_arr  ,bc='d')
    delta=this%cfg%min_meshsize
    
-   C = 2.1_WP
+   C = 1.5_WP
    Cy = 0.0022_WP
 
    ! =Febe=
-   !tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
-   !!tke_sgs = (fvisc/delta/frho/0.067_WP)**2
-   !eps_sgs = fCs*delta**2*fsr**3
-   !!eps_sgs = 2.0_WP*tke_sgs**1.5_WP / delta
-   !drift = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs
+   ! tke_sgs = 2.0_WP*Cy*delta**2*fsr**2
+   ! !tke_sgs = (fvisc/delta/frho/0.067_WP)**2
+   ! eps_sgs = fCs*delta**2*fsr**3
+   ! !eps_sgs = 2.0_WP*tke_sgs**1.5_WP / delta
+   ! drift = (0.5_WP+0.75_WP*C)*eps_sgs/tke_sgs
    
    ! =Pozorski=
    tke_sgs = (fvisc/frho/delta/0.067_WP)**2     ! SGS tke
@@ -410,7 +410,6 @@ contains
       end do
    end block pic_prep
    end if
-
    call this%get_diffusion(eddyvisc=eddyvisc,rho=rho,SR=SR,Cs_arr=Cs_arr)
 
    ! Zero out number of particles removed
@@ -424,8 +423,8 @@ contains
       pold=this%p(i)
 
       ! Advance with Euler prediction
-      this%p(i)%pos=pold%pos+0.5_WP*dt*this%p(i)%vel
       this%p(i)%vel=this%p(i)%us
+      this%p(i)%pos=pold%pos+0.5_WP*dt*this%p(i)%vel
       if (spatial_) then
          correlate_neighbors: block
            use mathtools, only: Pi,normalize
@@ -540,16 +539,16 @@ contains
          guz = [gu13,gu23,gu33]
          fld = this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
 
-         tmp1 = this%p(i)%us(1) + tau(1)*dt - (this%p(i)%us(1)-fld(1))*a_crw*dt + this%p(i)%dW(1)*rdt
-         tmp2 = this%p(i)%us(2) + tau(2)*dt - (this%p(i)%us(2)-fld(2))*a_crw*dt + this%p(i)%dW(2)*rdt
-         tmp3 = this%p(i)%us(3) + tau(3)*dt - (this%p(i)%us(3)-fld(3))*a_crw*dt + this%p(i)%dW(3)*rdt
+         tmp1 = this%p(i)%us(1) - tau(1)*dt - (this%p(i)%us(1)-fld(1))*a_crw*dt + this%p(i)%dW(1)*rdt
+         tmp2 = this%p(i)%us(2) - tau(2)*dt - (this%p(i)%us(2)-fld(2))*a_crw*dt + this%p(i)%dW(2)*rdt
+         tmp3 = this%p(i)%us(3) - tau(3)*dt - (this%p(i)%us(3)-fld(3))*a_crw*dt + this%p(i)%dW(3)*rdt
 
          !tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
          !tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
          !tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
       end if
-      this%p(i)%pos=pold%pos+dt*this%p(i)%vel
       this%p(i)%vel=this%p(i)%us
+      this%p(i)%pos=pold%pos+dt*this%p(i)%vel
 
       ! Stochastic update
       this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
@@ -705,7 +704,6 @@ contains
       end do
    end block pic_prep
    end if
-
    call this%get_diffusion(eddyvisc=eddyvisc,rho=rho,SR=SR,Cs_arr=Cs_arr)
 
    ! Zero out number of particles removed
@@ -719,8 +717,8 @@ contains
       pold=this%p(i)
 
       ! Advance with Euler prediction
-      this%p(i)%pos=pold%pos+0.5_WP*dt*this%p(i)%vel
       this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W) + this%p(i)%us
+      this%p(i)%pos=pold%pos+0.5_WP*dt*this%p(i)%vel
       if (spatial_) then
          correlate_neighbors: block
            use mathtools, only: Pi,normalize
@@ -830,19 +828,31 @@ contains
          gux = [gu11,gu21,gu31]
          guy = [gu12,gu22,gu32]
          guz = [gu13,gu23,gu33]
+         
+         ! ONLY SGS STRESS TENSOR
+         ! tmp1 = tau(1)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         ! tmp2 = tau(2)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         ! tmp3 = tau(3)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
+         
+         ! ONLY VELOCITY GRADIENT
+         ! tmp1 = -dot_product(this%p(i)%us(:),gux)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         ! tmp2 = -dot_product(this%p(i)%us(:),guy)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         ! tmp3 = -dot_product(this%p(i)%us(:),guz)*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
+         
+         ! FULL FLUCTUATION MODEL (Fede et al. 2006)
+         tmp1 = (-dot_product(this%p(i)%us(:),gux) + tau(1))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         tmp2 = (-dot_product(this%p(i)%us(:),guy) + tau(2))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         tmp3 = (-dot_product(this%p(i)%us(:),guz) + tau(3))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
 
-         !tmp1 = (-dot_product(this%p(i)%us(:),gux) + tau(1))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
-         !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tau(2))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
-         !tmp3 = (-dot_product(this%p(i)%us(:),guz) + tau(3))*dt + (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
-
-         tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
-         tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
-         tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
+         ! NO EXTRA DRIFT TERMS (Pozorski & Apte 2009)
+         ! tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + this%p(i)%dW(1)*rdt
+         ! tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + this%p(i)%dW(2)*rdt
+         ! tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + this%p(i)%dW(3)*rdt
       end if
-      this%p(i)%pos=pold%pos+dt*this%p(i)%vel
       this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W) + this%p(i)%us
+      this%p(i)%pos=pold%pos+dt*this%p(i)%vel
 
-      ! Stochastic update
+      ! S!tochastic update
       this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
       this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
       this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
