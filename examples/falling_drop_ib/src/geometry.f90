@@ -64,20 +64,20 @@ contains
       ! Create IB walls for this config
       create_walls: block
          use mathtools,      only: twoPi
-         use ibconfig_class, only: bigot
+         use ibconfig_class, only: bigot,sharp
          integer :: i,j,k
          ! Create IB field
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
-                  cfg%Gib(i,j,k)=0.02_WP+0.01_WP*cos(3.0_WP*twoPi*cfg%zm(k)/cfg%zL)*cos(3.0_WP*twoPi*cfg%xm(i)/cfg%xL)-cfg%ym(j)
+                  cfg%Gib(i,j,k)=0.02_WP+0.015_WP*cos(3.0_WP*twoPi*cfg%zm(k)/cfg%zL)*cos(3.0_WP*twoPi*cfg%xm(i)/cfg%xL)-cfg%ym(j)
                end do
             end do
          end do
          ! Get normal vector
          call cfg%calculate_normal()
          ! Get VF field
-         call cfg%calculate_vf(method=bigot)
+         call cfg%calculate_vf(method=sharp,allow_zero_vf=.true.)
       end block create_walls
       
       

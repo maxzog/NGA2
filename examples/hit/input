@@ -8,14 +8,8 @@ nx :	256
 # Fluid properties
 Dynamic viscosity :    0.008
 Density :              1
-Initial rms :          10
-Eddy turnover time :   0.1
-Linear forcing :       .true.
 
-# Steadt-state (forcing) parameters
-Steady-state TKE     : 3.0
-Steady-state epsilon : 6.0
-Forcing constant (G) : 50.0
+# Steady-state (forcing) parameters
 Force to maximum Re_lambda : .true.
 
 # Particle properties
@@ -28,11 +22,6 @@ Use CRW :              .false.
 Max timestep size : 1e-3
 Max cfl number :    0.9
 Max iter :          12500
-
 # Ensight output
-Ensight output period : 1.0
-
-# Restart config
-Restart sim : .false.
-# Restart from : 1.00044E-02
+Ensight output period : 0.1
 Restart output period : 1.0
