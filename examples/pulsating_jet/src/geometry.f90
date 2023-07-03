@@ -23,19 +23,33 @@ contains
       ! Create a grid from input params
       create_grid: block
          use sgrid_class, only: cartesian
-         integer :: i,nx
-         real(WP) :: Lx
+         integer :: i,nx,ny,nz
+         real(WP) :: Lx,Ly,Lz
          real(WP), dimension(:), allocatable :: x
+         real(WP), dimension(:), allocatable :: y
+         real(WP), dimension(:), allocatable :: z
          ! Read in grid definition
          call param_read('Lx',Lx)
+         call param_read('Ly',Ly)
+         call param_read('Lz',Lz)
          call param_read('nx',nx)
+         call param_read('ny',ny)
+         call param_read('nz',nz)
          allocate(x(nx+1))
+         allocate(y(ny+1))
+         allocate(z(nz+1))
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx
          end do
+         do i=1,ny+1
+            y(i)=real(i-1,WP)/real(ny,WP)*Ly
+         end do
+         do i=1,nz+1
+            z(i)=real(i-1,WP)/real(nz,WP)*Lz
+         end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=x,z=x,xper=.true.,yper=.true.,zper=.true.,name='HIT')
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jet')
       end block create_grid
       
       ! Create a config from that grid on our entire group

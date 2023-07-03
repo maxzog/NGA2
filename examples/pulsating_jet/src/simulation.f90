@@ -151,7 +151,8 @@ contains
      real(WP) :: dist 
      isIn = .false.; inRadius = .false.
      c_x = 2.5_WP; c_y = 2.5_WP
-     dist = sqrt((c_x - pg%x(i))**2 + (c_y - pg%y(j))**2) 
+     ! dist = sqrt((c_x - pg%x(i))**2 + (c_y - pg%y(j))**2) 
+     dist = abs(c_x - pg%x(i))
      if (dist.lt.0.1_WP) inRadius = .true.
      if (k.eq.pg%kmin.and.inRadius) isIn = .true. 
    end function jet_loc
@@ -364,7 +365,7 @@ contains
             call fs%get_bcond('jet', mybc)
             do n=1,mybc%itr%no_
                i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.5_WP 
+               fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP 
             end do
          end if
          
@@ -716,6 +717,28 @@ contains
             fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
             fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho
             fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho
+            
+            dirichlet_velocity: block
+               use incomp_class, only:bcond
+               type(bcond), pointer :: mybc
+               integer :: n,i,j,k
+               real(WP) :: ratio, tlin
+               logical :: ramp_stop
+               tlin=0.5_WP
+               ratio = time%t / tlin
+               ramp_stop=.false.
+               if (ratio.gt.1.0_WP) ramp_stop = .true.
+               call fs%get_bcond('jet', mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP
+                  if (ramp_stop) then
+                     fs%W(i,j,k) = 1.0_WP
+                  else
+                     fs%W(i,j,k) = ratio
+                  end if
+               end do
+            end block dirichlet_velocity
             
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
