@@ -36,7 +36,7 @@ module simulation
    logical :: restarted
    
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,hitfile,lptfile,sgsfile,tfile,ssfile
+   type(monitor) :: mfile,cflfile
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -48,29 +48,25 @@ module simulation
    
    !> Fluid, forcing, and particle parameters
    real(WP) :: visc,meanU,meanV,meanW
-   real(WP) :: Urms0,TKE0,EPS0,Re_max
-   real(WP) :: TKE,URMS,sgsTKE,EPSp
    real(WP) :: stk,tau_eta
-   real(WP) :: meanvisc,Lx,N
-   real(WP) :: tauinf,G,Gdtau,Gdtaui,dx
-   logical  :: linforce,use_sgs,maxRe
+   logical  :: use_sgs
    integer  :: sgs_type
 
    !> For monitoring
-   real(WP) :: EPS,sgsEPSp
-   real(WP) :: Re_L,Re_lambda
-   real(WP) :: eta,ell
-   real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
-   real(WP) :: ftvar,fvar,usvar,pvvar,varratio
-   real(WP), dimension(3) :: fmean,pvmean,usmean
+   ! real(WP) :: EPS,sgsEPSp
+   ! real(WP) :: Re_L,Re_lambda
+   ! real(WP) :: eta,ell
+   ! real(WP) :: dx_eta,ell_Lx,Re_ratio,eps_ratio,tke_ratio,nondtime
+   ! real(WP) :: ftvar,fvar,usvar,pvvar,varratio
+   ! real(WP), dimension(3) :: fmean,pvmean,usmean
 
-   !> Wallclock time for monitoring
-   type :: timer
-      real(WP) :: time_in
-      real(WP) :: time
-      real(WP) :: percent
-   end type timer
-   type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest,wt_sgs,wt_stat,wt_force
+   ! !> Wallclock time for monitoring
+   ! type :: timer
+   !    real(WP) :: time_in
+   !    real(WP) :: time
+   !    real(WP) :: percent
+   ! end type timer
+   ! type(timer) :: wt_total,wt_vel,wt_pres,wt_lpt,wt_rest,wt_sgs,wt_stat,wt_force
    
 contains
 
@@ -150,87 +146,12 @@ contains
      real(WP) :: c_x, c_y  ! Center of jet
      real(WP) :: dist 
      isIn = .false.; inRadius = .false.
-     c_x = 2.5_WP; c_y = 2.5_WP
-     ! dist = sqrt((c_x - pg%x(i))**2 + (c_y - pg%y(j))**2) 
-     dist = abs(c_x - pg%x(i))
+     c_x = 0.0_WP; c_y = 0.0_WP
+     dist = sqrt((c_x - pg%x(i))**2 + (c_y - pg%y(j))**2) 
+     !dist = abs(c_x - pg%x(i))
      if (dist.lt.0.1_WP) inRadius = .true.
      if (k.eq.pg%kmin.and.inRadius) isIn = .true. 
    end function jet_loc
-   
-   !> Compute turbulence stats
-   subroutine compute_stats()
-      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-      use parallel, only: MPI_REAL_WP
-      real(WP) :: myTKE,myEPS
-      real(WP) :: myfvar,myusvar,myftvar,mypvvar
-      real(WP), dimension(3) :: myfmean,myusmean,mypvmean,fld
-      integer :: i,j,k,ierr
-
-      ! Compute mean velocities
-      call fs%cfg%integrate(A=Ui,integral=meanU); meanU=meanU/fs%cfg%vol_total
-      call fs%cfg%integrate(A=Vi,integral=meanV); meanV=meanV/fs%cfg%vol_total
-      call fs%cfg%integrate(A=Wi,integral=meanW); meanW=meanW/fs%cfg%vol_total
-
-      ! Compute strainrate and grad(u)
-      call fs%get_strainrate(SR=SR)
-      call fs%get_gradu(gradu=gradu)
-
-      myTKE=0.0_WP; myEPS=0.0_WP
-
-      do k=fs%cfg%kmin_,fs%cfg%kmax_
-         do j=fs%cfg%jmin_,fs%cfg%jmax_
-            do i=fs%cfg%imin_,fs%cfg%imax_
-               myTKE = myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
-               myEPS = myEPS + 2.0_WP*fs%visc(i,j,k)*fs%cfg%vol(i,j,k)*(SR(1,i,j,k)**2+SR(2,i,j,k)**2+SR(3,i,j,k)**2+2.0_WP*(SR(4,i,j,k)**2+SR(5,i,j,k)**2+SR(6,i,j,k)**2))/fs%rho
-            end do
-         end do
-      end do
-      call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); TKE=TKE/fs%cfg%vol_total
-      call MPI_ALLREDUCE(myEPS,EPS,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); EPS=EPS/fs%cfg%vol_total
-
-      myftvar=0.0_WP; myfvar=0.0_WP; myusvar=0.0_WP; mypvvar=0.0_WP
-      myfmean=0.0_WP; myusmean=0.0_WP; mypvmean=0.0_WP
-
-      ! Particle means
-      do i=1,lp%np_
-         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
-         myfmean  = myfmean  + fld
-         myusmean = myusmean + lp%p(i)%uf
-         mypvmean = mypvmean + lp%p(i)%vel
-      end do
-
-      call MPI_ALLREDUCE(myfmean,fmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fmean =fmean/lp%np
-      call MPI_ALLREDUCE(myusmean,usmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usmean=usmean/lp%np
-      call MPI_ALLREDUCE(mypvmean,pvmean,3,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvmean=pvmean/lp%np
-
-      ! Particle variance terms
-      do i=1,lp%np_
-         fld = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
-         myftvar = myftvar + dot_product(fld+lp%p(i)%uf-fmean-usmean,fld+lp%p(i)%uf-fmean-usmean)
-         myfvar  = myfvar  + dot_product(fld-fmean,fld-fmean)
-         myusvar = myusvar + dot_product(lp%p(i)%uf-usmean,lp%p(i)%uf-usmean)
-         mypvvar = mypvvar + dot_product(lp%p(i)%vel-pvmean,lp%p(i)%vel-pvmean)
-      end do
-
-      call MPI_ALLREDUCE(myftvar,ftvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); ftvar=ftvar/lp%np/3.0_WP
-      call MPI_ALLREDUCE(myfvar,fvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)  ; fvar = fvar/lp%np/3.0_WP
-      call MPI_ALLREDUCE(myusvar,usvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); usvar=usvar/lp%np/3.0_WP
-      call MPI_ALLREDUCE(mypvvar,pvvar,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); pvvar=pvvar/lp%np/3.0_WP
-      varratio = pvvar/ftvar
-
-      URMS = sqrt(2.0_WP/3.0_WP*TKE)
-      Re_L = TKE**2.0_WP/EPS/visc
-      Re_lambda = sqrt(20.0_WP*Re_L/3.0_WP)
-      eta = (visc**3.0_WP/EPS)**0.25_WP
-      ell = (0.6667_WP*TKE)**1.5_WP / EPS
-
-      nondtime  = time%t/tauinf
-      dx_eta    = dx/eta
-      eps_ratio = EPS/EPS0
-      tke_ratio = TKE/TKE0
-      ell_Lx    = ell/Lx
-      Re_ratio  = Re_lambda/Re_max
-   end subroutine compute_stats
    
    !> Initialization of problem solver
    subroutine simulation_init
@@ -295,31 +216,32 @@ contains
          end if
       end block update_timetracker
 
-      ! Initialize timers
-      initialize_timers: block
-         wt_total%time=0.0_WP; wt_total%percent=0.0_WP
-         wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
-         wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
-         wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
-         wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
-         wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
-         wt_stat%time=0.0_WP;  wt_stat%percent=0.0_WP
-         wt_force%time=0.0_WP; wt_force%percent=0.0_WP
-      end block initialize_timers
+      ! ! Initialize timers
+      ! initialize_timers: block
+      !    wt_total%time=0.0_WP; wt_total%percent=0.0_WP
+      !    wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
+      !    wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
+      !    wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
+      !    wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
+      !    wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
+      !    wt_stat%time=0.0_WP;  wt_stat%percent=0.0_WP
+      !    wt_force%time=0.0_WP; wt_force%percent=0.0_WP
+      ! end block initialize_timers
       
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pcg_pfmg
+         use hypre_str_class, only: pcg_pfmg,pfmg,gmres_smg
+         use incomp_class,    only: clipped_neumann, dirichlet, slip
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Add BCs
-         call fs%add_bcond(name='left',  type=4,locator=left_of_domain,face='x',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='right', type=4,locator=right_of_domain,face='x',dir=+1,canCorrect=.false.)
-         call fs%add_bcond(name='bottom',type=4,locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='top',   type=4,locator=top_of_domain,face='y',dir=+1,canCorrect=.true. )
-         call fs%add_bcond(name='front', type=4,locator=front_of_domain,face='z',dir=+1,canCorrect=.true. )
-         call fs%add_bcond(name='back',  type=4,locator=back_of_domain,face='z',dir=-1,canCorrect=.true. )
-         call fs%add_bcond(name='jet',   type=2,locator=jet_loc,face='z',dir=-1,canCorrect=.true. )
+         call fs%add_bcond(name='left',  type=slip, locator=left_of_domain,face='x',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='right', type=slip, locator=right_of_domain,face='x',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='bottom',type=slip, locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='top',   type=slip, locator=top_of_domain,face='y',dir=+1,canCorrect=.false. )
+         call fs%add_bcond(name='front', type=clipped_neumann,locator=front_of_domain,face='z',dir=+1,canCorrect=.false. )
+         call fs%add_bcond(name='back',  type=dirichlet,locator=back_of_domain,face='z',dir=-1,canCorrect=.false. )
+         call fs%add_bcond(name='jet',   type=dirichlet,locator=jet_loc,face='z',dir=-1,canCorrect=.false. )
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -350,10 +272,8 @@ contains
          use parallel, only: MPI_REAL_WP
          use mathtools,only: Pi
          type(bcond), pointer :: mybc
-         integer :: i,j,k
+         integer :: i,j,k,n
          ! Read in forcing, grid, and initial velocity field parameters
-         call param_read('Lx', Lx)
-         call param_read('nx', N)
          ! Zero initial velocity field
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
          if (restarted) then
@@ -362,36 +282,25 @@ contains
             call df%pullvar(name='W',var=fs%W)
             call df%pullvar(name='P',var=fs%P)
          else
-            call fs%get_bcond('jet', mybc)
+            call fs%get_bcond('back', mybc)
             do n=1,mybc%itr%no_
                i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-               fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP 
+               fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.1_WP 
             end do
+           call fs%get_bcond('jet', mybc)
+           do n=1,mybc%itr%no_
+              i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+              fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.1_WP 
+           end do
          end if
-         
-         ! Compute mean and remove it from the velocity field to obtain <U>=0
-         call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
-         call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
-         call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
- 
-         ! Project to ensure divergence-free
-         call fs%get_div()
-         fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
-         fs%psolv%sol=0.0_WP
-         call fs%psolv%solve()
-         call fs%shift_p(fs%psolv%sol)
-         call fs%get_pgrad(fs%psolv%sol,resU,resV,resW)
-         fs%P=fs%P+fs%psolv%sol
-         fs%U=fs%U-time%dt*resU/fs%rho
-         fs%V=fs%V-time%dt*resV/fs%rho
-         fs%W=fs%W-time%dt*resW/fs%rho
- 
-         ! Calculate cell-centered velocities and divergence
+        
+         meanU=0.0_WP; meanV=0.0_WP; meanW=0.0_WP
+         call fs%get_mfr()
+         call fs%correct_mfr()
          call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_div()
 
          ! Compute turbulence stats
-         call compute_stats()
+         ! call compute_stats()
       end block initialize_velocity
       
       ! Initialize LPT solver
@@ -418,8 +327,8 @@ contains
          else
          ! Root process initializes np particles randomly
             if (lp%cfg%amRoot) then
-               tau_eta = sqrt(visc/EPS0)
-               dp = sqrt(18.0_WP*visc*stk*tau_eta/lp%rho)
+               tau_eta = 1.0_WP !sqrt(visc/EPS0)
+               dp = 1.0_WP !sqrt(18.0_WP*visc*stk*tau_eta/lp%rho)
                call lp%resize(np)
                do i=1,np
                   ! Give id
@@ -500,7 +409,6 @@ contains
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(meanW,'Wmean')
          call mfile%add_column(fs%Pmax,'Pmax')
-         call mfile%add_column(TKE,'Kinetic energy')
          call mfile%add_column(fs%divmax,'Maximum divergence')
          call mfile%add_column(fs%psolv%it,'Pressure iteration')
          call mfile%add_column(fs%psolv%rerr,'Pressure error')
@@ -516,81 +424,6 @@ contains
          call cflfile%add_column(fs%CFLv_y,'Viscous yCFL')
          call cflfile%add_column(fs%CFLv_z,'Viscous zCFL')
          call cflfile%write()
-         ! Create hit monitor
-         hitfile=monitor(fs%cfg%amRoot,'hit')
-         call hitfile%add_column(time%n,'Timestep number')
-         call hitfile%add_column(time%t,'Time')
-         call hitfile%add_column(Re_L,'Re_L')
-         call hitfile%add_column(Re_lambda,'Re_lambda')
-         call hitfile%add_column(meanvisc,'mean visc') 
-         call hitfile%add_column(eta,'eta')
-         call hitfile%add_column(sgsTKE,'sgsTKE')
-         call hitfile%add_column(TKE,'TKE')
-         call hitfile%add_column(URMS,'URMS')
-         call hitfile%add_column(EPS,'EPS')
-         call hitfile%add_column(EPSp,'EPSp')
-         call hitfile%add_column(ell,'Integral lengthscale')
-         call hitfile%write()
-         ! Create hit convergence monitor
-         ssfile=monitor(fs%cfg%amRoot,'convergence')
-         call ssfile%add_column(time%n,'Timestep number')
-         call ssfile%add_column(time%t,'Time')
-         call ssfile%add_column(nondtime,'Time/t_int')
-         call ssfile%add_column(Re_ratio,'Re_ratio')
-         call ssfile%add_column(eps_ratio,'EPS_ratio')
-         call ssfile%add_column(tke_ratio,'TKE_ratio')
-         call ssfile%add_column(dx_eta,'dx/eta')
-         call ssfile%add_column(ell_Lx,'ell/Lx')
-         call ssfile%write()
-         ! Create LPT monitor
-         call lp%get_max()
-         lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
-         call lptfile%add_column(time%n,'Timestep number')
-         call lptfile%add_column(time%t,'Time')
-         call lptfile%add_column(lp%np,'Particle number')
-         call lptfile%add_column(lp%Umin,'Particle Umin')
-         call lptfile%add_column(lp%Umax,'Particle Umax')
-         call lptfile%add_column(lp%Vmin,'Particle Vmin')
-         call lptfile%add_column(lp%Vmax,'Particle Vmax')
-         call lptfile%add_column(lp%Wmin,'Particle Wmin')
-         call lptfile%add_column(lp%Wmax,'Particle Wmax')
-         call lptfile%add_column(lp%dmin,'Particle dmin')
-         call lptfile%add_column(lp%dmax,'Particle dmax')
-         call lptfile%add_column(ftvar, 'fldtot Variance')
-         call lptfile%add_column(fvar,  'fld Variance')
-         call lptfile%add_column(usvar, 'us Variance')
-         call lptfile%add_column(pvvar, 'pvel Variance')
-         call lptfile%add_column(varratio,'vel2fld ratio')
-         call lptfile%write()
-         ! Create SGS monitor
-         sgsfile=monitor(fs%cfg%amroot,'sgs')
-         call sgsfile%add_column(time%n,'Timestep number')
-         call sgsfile%add_column(time%t,'Time')
-         call sgsfile%add_column(sgs%min_visc,'Min eddy visc')
-         call sgsfile%add_column(sgs%max_visc,'Max eddy visc')
-         call sgsfile%add_column(sgsEPSp,'sgsEPS')
-         call sgsfile%add_column(sgsTKE,'sgsTKE')
-         call sgsfile%write()
-         ! Create timing monitor
-         tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
-         call tfile%add_column(time%n,'Timestep number')
-         call tfile%add_column(time%t,'Time')
-         call tfile%add_column(wt_total%time,'Total [s]')
-         call tfile%add_column(wt_vel%time,'Velocity [s]')
-         call tfile%add_column(wt_vel%percent,'Velocity [%]')
-         call tfile%add_column(wt_pres%time,'Pressure [s]')
-         call tfile%add_column(wt_pres%percent,'Pressure [%]')
-         call tfile%add_column(wt_lpt%time,'LPT [s]')
-         call tfile%add_column(wt_lpt%percent,'LPT [%]')
-         call tfile%add_column(wt_sgs%time,'SGS [s]')
-         call tfile%add_column(wt_sgs%percent,'SGS [%]')
-         call tfile%add_column(wt_stat%time,'Stats [s]')
-         call tfile%add_column(wt_stat%percent,'Stats [%]')
-         call tfile%add_column(wt_force%time,'Forcing [s]')
-         call tfile%add_column(wt_force%percent,'Forcing [%]')
-         call tfile%add_column(wt_rest%time,'Rest [s]')
-         call tfile%add_column(wt_rest%percent,'Rest [%]')
-         call tfile%write()
       end block create_monitor
       
       
@@ -602,21 +435,17 @@ contains
       use parallel,       only: parallel_time
       implicit none
       integer :: ii
-      do ii=1,lp%np
-         lp%p(ii)%vel=0.7_WP*lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
-      end do 
       ! Perform time integration
       do while (.not.time%done())
-
          ! init wallclock
-         wt_total%time_in=parallel_time()
+         ! wt_total%time_in=parallel_time()
          
          ! Increment time
          call fs%get_cfl(time%dt,time%cfl)
          call time%adjust_dt()
          call time%increment()
 
-         wt_lpt%time_in=parallel_time()
+         ! wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
          if (stk.gt.0.0_WP) then
@@ -624,16 +453,16 @@ contains
          else
             call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
          end if
-         wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
+         ! wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Remember old velocity
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-
+         
          ! Turbulence modeling
          call fs%interp_vel(Ui,Vi,Wi)
-         wt_sgs%time_in=parallel_time()
+         ! wt_sgs%time_in=parallel_time()
          if (use_sgs) then
             fs%visc=visc
             call fs%get_strainrate(SR=SR)
@@ -645,12 +474,11 @@ contains
             end where
             fs%visc=fs%visc+sgs%visc
          end if
-         wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
+         ! wt_sgs%time=wt_sgs%time+parallel_time()-wt_sgs%time_in
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
-
-            wt_vel%time_in=parallel_time()
+            ! wt_vel%time_in=parallel_time()
             
             ! Build mid-time velocity
             fs%U=0.5_WP*(fs%U+fs%Uold)
@@ -665,87 +493,59 @@ contains
             resV=-2.0_WP*(fs%rho*fs%V-fs%rho*fs%Vold)+time%dt*resV
             resW=-2.0_WP*(fs%rho*fs%W-fs%rho*fs%Wold)+time%dt*resW
             
-            wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
-            wt_force%time_in=parallel_time()
-            if (linforce) then
-               ! Add linear forcing term
-               ! See Bassenne et al. (2016)
-               linear_forcing: block
-                  use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
-                  use parallel, only: MPI_REAL_WP
-                  use messager, only: die
-                  real(WP) :: myTKE,A,myvisc,myEPSp
-                  integer :: i,j,k,ierr
-   
-                  ! Calculate mean velocity
-                  call fs%cfg%integrate(A=fs%U,integral=meanU); meanU=meanU/fs%cfg%vol_total
-                  call fs%cfg%integrate(A=fs%V,integral=meanV); meanV=meanV/fs%cfg%vol_total
-                  call fs%cfg%integrate(A=fs%W,integral=meanW); meanW=meanW/fs%cfg%vol_total
-   
-                  ! Calculate TKE and EPS
-                  call fs%interp_vel(Ui,Vi,Wi)
-                  call fs%get_gradu(gradu=gradu)
-                  myvisc=0.0_WP; myTKE=0.0_WP; myEPSp=0.0_WP
-                  do k=fs%cfg%kmin_,fs%cfg%kmax_
-                     do j=fs%cfg%jmin_,fs%cfg%jmax_
-                        do i=fs%cfg%imin_,fs%cfg%imax_  
-                           myTKE=myTKE+0.5_WP*((Ui(i,j,k)-meanU)**2+(Vi(i,j,k)-meanV)**2+(Wi(i,j,k)-meanW)**2)*fs%cfg%vol(i,j,k)
-
-                           ! Pseudo-dissipation 
-                           myEPSp=myEPSp+fs%cfg%vol(i,j,k)*fs%visc(i,j,k)*(                       &
-                                    gradu(1,1,i,j,k)**2+gradu(1,2,i,j,k)**2+gradu(1,3,i,j,k)**2 + &
-                                    gradu(2,1,i,j,k)**2+gradu(2,2,i,j,k)**2+gradu(2,3,i,j,k)**2 + &
-                                    gradu(3,1,i,j,k)**2+gradu(3,2,i,j,k)**2+gradu(3,3,i,j,k)**2)
-                        end do
-                     end do
-                  end do
-                  call MPI_ALLREDUCE(myTKE,TKE,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr      ); TKE = TKE/fs%cfg%vol_total
-                  call MPI_ALLREDUCE(myEPSp,EPSp,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr    ); EPSp = EPSp/fs%cfg%vol_total/fs%rho
-   
-                  if (Gdtaui.lt.time%dt) call die("[linear_forcing] Controller time constant less than timestep")
-                  A   = (EPSp - Gdtau*(TKE-TKE0))/(2.0_WP*TKE)*fs%rho ! - Eq. (7) (forcing constant TKE)
-   
-                  resU=resU+time%dt*(fs%U-meanU)*A
-                  resV=resV+time%dt*(fs%V-meanV)*A
-                  resW=resW+time%dt*(fs%W-meanW)*A
-               end block linear_forcing
-            end if
-            wt_force%time=wt_force%time+parallel_time()-wt_force%time_in
-            wt_vel%time_in=parallel_time()
+            ! wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
+            ! wt_force%time_in=parallel_time()
+            ! wt_force%time=wt_force%time+parallel_time()-wt_force%time_in
+            ! wt_vel%time_in=parallel_time()
 
             ! Apply these residuals
             fs%U=2.0_WP*fs%U-fs%Uold+resU/fs%rho
             fs%V=2.0_WP*fs%V-fs%Vold+resV/fs%rho
             fs%W=2.0_WP*fs%W-fs%Wold+resW/fs%rho
             
+            
+            
             dirichlet_velocity: block
                use incomp_class, only:bcond
                type(bcond), pointer :: mybc
                integer :: n,i,j,k
                real(WP) :: ratio, tlin
-               logical :: ramp_stop
-               tlin=0.5_WP
+               logical :: ramp_up,ramp_down,ramp_stop
+               tlin=1.0_WP
                ratio = time%t / tlin
-               ramp_stop=.false.
-               if (ratio.gt.1.0_WP) ramp_stop = .true.
+               ramp_up=.false.; ramp_down=.false.; ramp_stop=.false.
+               if (ratio.lt.1.0_WP) ramp_up = .true.
+               if (ratio.gt.1.0_WP) ramp_down = .true.
+               if (ratio.gt.1.5_WP) ramp_stop = .true.
+               call fs%get_bcond('back', mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.1_WP
+               end do
                call fs%get_bcond('jet', mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                  fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP
-                  if (ramp_stop) then
-                     fs%W(i,j,k) = 1.0_WP
+                  fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP;fs%W(i,j,k)=0.1_WP
+                  if (time%t.lt.1.0_WP) then
+                     fs%W(i,j,k) = 0.75_WP
                   else
-                     fs%W(i,j,k) = ratio
+                     fs%W(i,j,k) = 0.1_WP
                   end if
+                  ! elseif (ramp_down.and..not.ramp_stop) then
+                  !    fs%W(i,j,k) = 0.1_WP
+                  !    if (fs%W(i,j,k).lt.0.0_WP) fs%W(i,j,k) = 0.1_WP
+                  ! else 
+                  !    fs%W(i,j,k) = 0.1_WP
+                  ! end if
                end do
             end block dirichlet_velocity
-            
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
-            wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
+            ! wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
             
             ! Solve Poisson equation
-            wt_pres%time_in=parallel_time()
+            ! wt_pres%time_in=parallel_time()
+            call fs%get_mfr()
             call fs%correct_mfr()
             call fs%get_div()
             fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
@@ -759,22 +559,18 @@ contains
             fs%U=fs%U-time%dt*resU/fs%rho
             fs%V=fs%V-time%dt*resV/fs%rho
             fs%W=fs%W-time%dt*resW/fs%rho
-            wt_pres%time=wt_pres%time+parallel_time()-wt_pres%time_in
+            ! wt_pres%time=wt_pres%time+parallel_time()-wt_pres%time_in
             
             ! Increment sub-iteration counter
             time%it=time%it+1
    
          end do
          
-         wt_vel%time_in=parallel_time()
+         ! wt_vel%time_in=parallel_time()
          ! Recompute interpolated velocity and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
-         wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
-
-         wt_stat%time_in=parallel_time()
-         call compute_stats()
-         wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
+         ! wt_vel%time=wt_vel%time+parallel_time()-wt_vel%time_in
          
          ! Output to ensight
          if (ens_evt%occurs()) then
@@ -791,31 +587,26 @@ contains
          call fs%get_max()
          call mfile%write()
          call cflfile%write()
-         call hitfile%write()
-         call lp%get_max()
-         call lptfile%write()
-         call sgsfile%write()
-         call ssfile%write()
 
-         ! Monitor timing
-         wt_total%time=parallel_time()-wt_total%time_in
-         wt_vel%percent=wt_vel%time/wt_total%time*100.0_WP
-         wt_pres%percent=wt_pres%time/wt_total%time*100.0_WP
-         wt_lpt%percent=wt_lpt%time/wt_total%time*100.0_WP
-         wt_sgs%percent=wt_sgs%time/wt_total%time*100.0_WP
-         wt_stat%percent=wt_stat%time/wt_total%time*100.0_WP
-         wt_force%percent=wt_force%time/wt_total%time*100.0_WP
-         wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_lpt%time-wt_sgs%time-wt_stat%time-wt_force%time
-         wt_rest%percent=wt_rest%time/wt_total%time*100.0_WP
-         call tfile%write()
-         wt_total%time=0.0_WP; wt_total%percent=0.0_WP
-         wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
-         wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
-         wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
-         wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
-         wt_stat%time=0.0_WP;  wt_stat%percent=0.0_WP
-         wt_force%time=0.0_WP; wt_force%percent=0.0_WP
-         wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
+         ! ! Monitor timing
+         ! wt_total%time=parallel_time()-wt_total%time_in
+         ! wt_vel%percent=wt_vel%time/wt_total%time*100.0_WP
+         ! wt_pres%percent=wt_pres%time/wt_total%time*100.0_WP
+         ! wt_lpt%percent=wt_lpt%time/wt_total%time*100.0_WP
+         ! wt_sgs%percent=wt_sgs%time/wt_total%time*100.0_WP
+         ! wt_stat%percent=wt_stat%time/wt_total%time*100.0_WP
+         ! wt_force%percent=wt_force%time/wt_total%time*100.0_WP
+         ! wt_rest%time=wt_total%time-wt_vel%time-wt_pres%time-wt_lpt%time-wt_sgs%time-wt_stat%time-wt_force%time
+         ! wt_rest%percent=wt_rest%time/wt_total%time*100.0_WP
+         ! call tfile%write()
+         ! wt_total%time=0.0_WP; wt_total%percent=0.0_WP
+         ! wt_vel%time=0.0_WP;   wt_vel%percent=0.0_WP
+         ! wt_pres%time=0.0_WP;  wt_pres%percent=0.0_WP
+         ! wt_lpt%time=0.0_WP;   wt_lpt%percent=0.0_WP
+         ! wt_sgs%time=0.0_WP;   wt_sgs%percent=0.0_WP
+         ! wt_stat%time=0.0_WP;  wt_stat%percent=0.0_WP
+         ! wt_force%time=0.0_WP; wt_force%percent=0.0_WP
+         ! wt_rest%time=0.0_WP;  wt_rest%percent=0.0_WP
 
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then

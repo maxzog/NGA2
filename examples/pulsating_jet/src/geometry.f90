@@ -24,7 +24,10 @@ contains
       create_grid: block
          use sgrid_class, only: cartesian
          integer :: i,nx,ny,nz
+         logical :: stretch_x,stretch_y,stretch_z
          real(WP) :: Lx,Ly,Lz
+         real(WP) :: xtilde,ytilde,ztilde
+         real(WP) :: alpha,minAlpha,maxAlpha,r
          real(WP), dimension(:), allocatable :: x
          real(WP), dimension(:), allocatable :: y
          real(WP), dimension(:), allocatable :: z
@@ -35,18 +38,51 @@ contains
          call param_read('nx',nx)
          call param_read('ny',ny)
          call param_read('nz',nz)
+
+         call param_read('Stretch x', stretch_x, default=.false.)
+         call param_read('Stretch y', stretch_y, default=.false.)
+         call param_read('Stretch z', stretch_z, default=.false.)
+
+         call param_read('Stretch factor', r, default=2.0_WP)
          allocate(x(nx+1))
          allocate(y(ny+1))
          allocate(z(nz+1))
          ! Create simple rectilinear grid
          do i=1,nx+1
-            x(i)=real(i-1,WP)/real(nx,WP)*Lx
+            if (stretch_x) then
+               xtilde = 2.0_WP * real(i-1,WP) / real(nx-1,WP) - 1.0_WP
+               alpha = 0.5_WP * (1.0_WP+sinh(r*xtilde))
+               minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
+               maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
+               alpha = (alpha-minAlpha)/(maxAlpha-minAlpha)
+               x(i) = Lx * alpha - 0.5 * Lx
+            else
+               x(i)=real(i-1,WP)/real(nx,WP)*Lx
+            end if
          end do
          do i=1,ny+1
-            y(i)=real(i-1,WP)/real(ny,WP)*Ly
+            if (stretch_y) then
+               ytilde = 2.0_WP * real(i-1,WP) / real(ny-1,WP) - 1.0_WP
+               alpha = 0.5_WP * (1.0_WP+sinh(r*ytilde))
+               minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
+               maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
+               alpha = (alpha-minAlpha)/(maxAlpha-minAlpha)
+               y(i) = Ly * alpha - 0.5 * Ly
+            else
+               y(i)=real(i-1,WP)/real(ny,WP)*Ly
+            end if
          end do
          do i=1,nz+1
-            z(i)=real(i-1,WP)/real(nz,WP)*Lz
+            if (stretch_z) then
+               ztilde = 2.0_WP * real(i-1,WP) / real(nz-1,WP) - 1.0_WP
+               alpha = 0.5_WP * (1.0_WP+sinh(r*ztilde))
+               minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
+               maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
+               alpha = (alpha-minAlpha)/(maxAlpha-minAlpha)
+               z(i) = Lz * alpha - 0.5 * Ly
+            else
+               z(i)=real(i-1,WP)/real(nz,WP)*Lz
+            end if
          end do
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jet')
