@@ -177,8 +177,8 @@ module simulation
          call fs%add_bcond(name='right', type=clipped_neumann,locator=right_of_domain,face='x',dir=+1,canCorrect=.true.)
          call fs%add_bcond(name='bottom',type=slip, locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
          call fs%add_bcond(name='top',   type=slip, locator=top_of_domain,face='y',dir=+1,canCorrect=.false.)
-         ! call fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=-1,canCorrect=.false.)
-         ! call fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=+1,canCorrect=.false.)
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -409,6 +409,9 @@ module simulation
             fs%U=2.0_WP*fs%U-fs%Uold+resU
             fs%V=2.0_WP*fs%V-fs%Vold+resV
             fs%W=2.0_WP*fs%W-fs%Wold+resW
+
+            ! From Monroe et al. 2021
+            ! Q(t) = Q_0 * |exp{-t/tau} * sin(omega * t)|
 
 !!$            !> Time-varying boundary condition
 !!$            dirichlet_velocity: block

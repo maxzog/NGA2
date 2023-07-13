@@ -1,22 +1,25 @@
 # Parallelization
-Partition :	2 2 1
+Partition :	4 4 3
 
 # Mesh definition
 Lx :	4.0
 Ly :	2.0
-Lz :	1e-4
-nx :  64
-ny :	64
-nz :	1
+Lz :	2.0
+nx :  128
+ny :	128
+nz :  128
 
 Stretch x : .false.
 Stretch y : .true.
-Stretch z : .false.
+Stretch z : .true.
 
 Stretch factor : 2.0
 
+# Jet
+Jet diameter : 0.3
+
 # Fluid properties
-Dynamic viscosity :    0.01 #17.22E-03
+Dynamic viscosity :    17.22E-03
 Density :              1.208
 
 # Particle properties
