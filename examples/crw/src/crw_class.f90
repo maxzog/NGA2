@@ -1327,7 +1327,6 @@ contains
        ! Time-integrate until dt_done=dt
        dt_done=0.0_WP
        
-       this%p(i)%us = 0.0_WP*this%p(i)%us
        do while (dt_done.lt.dt)
           ! Decide the timestep size
           mydt=min(this%p(i)%dt,dt-dt_done)
