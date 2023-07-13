@@ -55,7 +55,7 @@ contains
                minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
                maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
                alpha = (alpha-minAlpha)/(maxAlpha-minAlpha)
-               x(i) = Lx * alpha - 0.5 * Lx
+               x(i) = Lx * alpha
             else
                x(i)=real(i-1,WP)/real(nx,WP)*Lx
             end if
@@ -67,9 +67,9 @@ contains
                minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
                maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
                alpha = (alpha-minAlpha)/(maxAlpha-minAlpha)
-               y(i) = Ly * alpha - 0.5 * Ly
+               y(i) = Ly * alpha - 0.5_WP * Ly
             else
-               y(i)=real(i-1,WP)/real(ny,WP)*Ly
+               y(i)=real(i-1,WP)/real(ny,WP)*Ly - 0.5_WP * Ly
             end if
          end do
          do i=1,nz+1
@@ -79,9 +79,9 @@ contains
                minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
                maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
                alpha = (alpha-minAlpha)/(maxAlpha-minAlpha)
-               z(i) = Lz * alpha - 0.5 * Ly
+               z(i) = Lz * alpha - 0.5_WP * Lz
             else
-               z(i)=real(i-1,WP)/real(nz,WP)*Lz
+               z(i)=real(i-1,WP)/real(nz,WP)*Lz - 0.5_WP * Lz
             end if
          end do
          ! General serial grid object
