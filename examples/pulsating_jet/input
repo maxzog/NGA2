@@ -2,9 +2,9 @@
 Partition :	4 4 3
 
 # Mesh definition
-Lx :	4.0
-Ly :	2.0
-Lz :	2.0
+Lx :	9.0
+Ly :	5.0
+Lz :	5.0
 nx :  128
 ny :	128
 nz :  128
@@ -16,7 +16,7 @@ Stretch z : .true.
 Stretch factor : 2.0
 
 # Jet
-Jet diameter : 0.3
+Jet diameter : 1.0
 
 # Fluid properties
 Dynamic viscosity :    17.22E-03
