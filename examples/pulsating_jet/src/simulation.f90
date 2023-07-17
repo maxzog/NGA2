@@ -48,8 +48,11 @@ module simulation
    integer  :: sgs_type
 
    !> Jet parameters
-   real(WP) :: Djet
-   
+   real(WP) :: Djet        ! Jet diameter
+   real(WP) :: Qt,Q0       ! Volumetric flow rates (time, max)
+   real(WP) :: U0          ! Bulk velocity 
+   real(WP) :: omegaj,tauj ! Pulse frequency and decay rate
+
  contains
 
    !> Function that localizes the jet at -x
@@ -171,6 +174,9 @@ module simulation
          fs=incomp(cfg=cfg,name='NS solver')
          ! Get jet diameter
          call param_read('Jet diameter',Djet,default=0.1_WP)
+         call param_read('Flow rate',Q0,default=0.001_WP)
+         call param_read('Pulse frequency',omegaj,default=1.0_WP)
+         call param_read('Pulse decay time',tauj,default=0.2_WP)
          ! Add BCs
          call fs%add_bcond(name='jet',   type=dirichlet,locator=jet_loc,face='x',dir=-1,canCorrect=.false. )
          call fs%add_bcond(name='coflow',type=dirichlet,locator=coflow_loc,face='x',dir=-1,canCorrect=.false. )
@@ -413,36 +419,27 @@ module simulation
             ! From Monroe et al. 2021
             ! Q(t) = Q_0 * |exp{-t/tau} * sin(omega * t)|
 
-!!$            !> Time-varying boundary condition
-!!$            dirichlet_velocity: block
-!!$               use incomp_class, only:bcond
-!!$               type(bcond), pointer :: mybc
-!!$               integer :: n,i,j,k
-!!$               real(WP) :: ratio, tlin
-!!$               logical :: ramp_up,ramp_down,ramp_stop
-!!$               tlin=1.0_WP
-!!$               ratio = time%t / tlin
-!!$               ramp_up=.false.; ramp_down=.false.; ramp_stop=.false.
-!!$               if (ratio.lt.1.0_WP) ramp_up = .true.
-!!$               if (ratio.gt.1.0_WP) ramp_down = .true.
-!!$               if (ratio.gt.1.5_WP) ramp_stop = .true.
-!!$               call fs%get_bcond('jet', mybc)
-!!$               do n=1,mybc%itr%no_
-!!$                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-!!$                  fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP;fs%W(i,j,k)=0.1_WP
-!!$                  if (time%t.lt.1.0_WP) then
-!!$                     fs%W(i,j,k) = 0.75_WP
-!!$                  else
-!!$                     fs%W(i,j,k) = 0.1_WP
-!!$                  end if
-!!$                  ! elseif (ramp_down.and..not.ramp_stop) then
-!!$                  !    fs%W(i,j,k) = 0.1_WP
-!!$                  !    if (fs%W(i,j,k).lt.0.0_WP) fs%W(i,j,k) = 0.1_WP
-!!$                  ! else 
-!!$                  !    fs%W(i,j,k) = 0.1_WP
-!!$                  ! end if
-!!$               end do
-!!$             end block dirichlet_velocity
+            !> Time-varying boundary condition
+            dirichlet_velocity: block
+               use incomp_class, only: bcond
+               use mathtools,    only: Pi
+               use pgrid_class,  only: pgrid
+               type(pgrid) :: pg
+               type(bcond), pointer :: mybc
+               integer :: n,i,j,k
+               real(WP) :: r
+               
+               Qt = Q0 * ABS(EXP(-time%t/tauj)*SIN(omegaj * time%t)) / 1000.0_WP
+               U0 = Qt/(Pi * Djet**2 / 4.0_WP)
+                
+               call fs%get_bcond('jet', mybc)
+               do n=1,mybc%itr%no_
+                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                  fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
+                  r = norm2([pg%ym(j), pg%zm(k)])
+                  fs%U(i,j,k) = U0*log10(2.0_WP*r/Djet) 
+               end do
+            end block dirichlet_velocity
              
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
@@ -489,7 +486,6 @@ module simulation
          call cflfile%write()
          
       end do
-      
    end subroutine simulation_run
    
    
@@ -505,11 +501,6 @@ module simulation
       
       ! Deallocate work arrays
       deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu)
-      
    end subroutine simulation_final
-   
-   
-   
-   
    
 end module simulation

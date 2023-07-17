@@ -2,12 +2,12 @@
 Partition :	4 4 3
 
 # Mesh definition
-Lx :	9.0
-Ly :	5.0
-Lz :	5.0
-nx :  128
-ny :	128
-nz :  128
+Lx :	1.016 # Meters
+Ly :	0.508 # Meters
+Lz :	0.508 # Meters
+nx :  64
+ny :	64
+nz :  64
 
 Stretch x : .false.
 Stretch y : .true.
@@ -16,10 +16,13 @@ Stretch z : .true.
 Stretch factor : 2.0
 
 # Jet
-Jet diameter : 1.0
+Flow rate        : 225.0  # SLM
+Pulse frequency  : 15.5   # 1/Seconds
+Pulse decay time : 0.7    # Seconds
+Jet diameter     : 0.0254 # Meters
 
 # Fluid properties
-Dynamic viscosity :    17.22E-03
+Dynamic viscosity :    1.82E-05
 Density :              1.208
 
 # Particle properties
