@@ -53,6 +53,9 @@ module simulation
    real(WP) :: U0          ! Bulk velocity 
    real(WP) :: omegaj,tauj ! Pulse frequency and decay rate
 
+   real(WP) :: dt_dat      ! Time step in flow rate data
+   real(WP), dimension(:), allocatable :: tdat,qdat ! Flow rate data (time [SEC] and flow rate [SLM])
+
  contains
 
    !> Function that localizes the jet at -x
@@ -153,7 +156,23 @@ module simulation
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(tdat(201))
+         allocate(qdat(201))
       end block allocate_work_arrays
+
+      ! Read in flow rate
+      read_flow_rate: block
+         integer :: i
+         open (unit=99, file="./flowdata/flow.txt", status='old', action='read')
+         read(99,*) qdat(:)
+         close(99)
+         
+         open (unit=99, file="./flowdata/time.txt", status='old', action='read')
+         read(99,*) tdat(:)
+         close(99)
+
+         dt_dat = tdat(2) - tdat(1)
+      end block read_flow_rate
       
       
       ! Initialize time tracker with 2 subiterations
@@ -324,6 +343,7 @@ module simulation
          mfile=monitor(fs%cfg%amRoot,'simulation')
          call mfile%add_column(time%n,'Timestep number')
          call mfile%add_column(time%t,'Time')
+         call mfile%add_column(Qt,'Jet')
          call mfile%add_column(time%dt,'Timestep size')
          call mfile%add_column(time%cfl,'Maximum CFL')
          call mfile%add_column(fs%Umax,'Umax')
@@ -424,20 +444,26 @@ module simulation
                use incomp_class, only: bcond
                use mathtools,    only: Pi
                type(bcond), pointer :: mybc
-               integer :: n,i,j,k
+               integer :: n,i,j,k,jn,jp
                real(WP) :: r
-               
-               Qt = Q0 * ABS(EXP(-time%t/tauj)*SIN(omegaj * time%t)) / 1000.0_WP
-               U0 = Qt/(Pi * Djet**2 / 4.0_WP)
 
-               if (fs%cfg%amRoot) print *, fs%Umax
+               jn = FLOOR(time%t/dt_dat) + 1
+               jp = jn + 1;
+               
+               ! Linear interpolation of provided flow rate data
+               Qt = (qdat(jp) - qdat(jn)) / (tdat(jp) - tdat(jn)) * (time%t - tdat(jn)) + qdat(jn) 
+               
+               ! Convert SLM -> m/s
+               U0 = Qt / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
+
+               if (fs%cfg%amRoot) print *, U0
                 
                call fs%get_bcond('jet', mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
                   r = norm2([fs%cfg%ym(j), fs%cfg%zm(k)])
-                  fs%U(i,j,k) = U0 * (1 - 2.0_WP * r/Djet)**(1.0_WP / 8.0_WP) 
+                  fs%U(i,j,k) = U0 * (1 - 2.0_WP * r/Djet)**(1.0_WP / 7.0_WP) 
                end do
             end block dirichlet_velocity
              
@@ -500,7 +526,7 @@ module simulation
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu,tdat,qdat)
    end subroutine simulation_final
    
 end module simulation
