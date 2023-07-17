@@ -455,8 +455,6 @@ module simulation
                
                ! Convert SLM -> m/s
                U0 = Qt / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
-
-               if (fs%cfg%amRoot) print *, U0
                 
                call fs%get_bcond('jet', mybc)
                do n=1,mybc%itr%no_

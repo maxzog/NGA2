@@ -5,9 +5,9 @@ Partition :	1 2 2
 Lx :	1.016 # Meters
 Ly :	0.508 # Meters
 Lz :	0.508 # Meters
-nx :  64
-ny :	64
-nz :  64
+nx :  420
+ny :	420
+nz :  1024
 
 Stretch x : .false.
 Stretch y : .true.
@@ -22,8 +22,8 @@ Pulse decay time : 0.7    # Seconds
 Jet diameter     : 0.0254 # Meters
 
 # Fluid properties
-Dynamic viscosity :    1.82E-05
-Density :              1.208
+Dynamic viscosity :    1.62E-05
+Density :              1.172
 
 # Particle properties
 Particle density :     1000
