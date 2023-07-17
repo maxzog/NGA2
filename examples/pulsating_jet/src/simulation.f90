@@ -183,8 +183,8 @@ module simulation
          call fs%add_bcond(name='right', type=clipped_neumann,locator=right_of_domain,face='x',dir=+1,canCorrect=.true.)
          call fs%add_bcond(name='bottom',type=slip, locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
          call fs%add_bcond(name='top',   type=slip, locator=top_of_domain,face='y',dir=+1,canCorrect=.false.)
-         call fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=-1,canCorrect=.false.)
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -423,21 +423,21 @@ module simulation
             dirichlet_velocity: block
                use incomp_class, only: bcond
                use mathtools,    only: Pi
-               use pgrid_class,  only: pgrid
-               type(pgrid) :: pg
                type(bcond), pointer :: mybc
                integer :: n,i,j,k
                real(WP) :: r
                
                Qt = Q0 * ABS(EXP(-time%t/tauj)*SIN(omegaj * time%t)) / 1000.0_WP
                U0 = Qt/(Pi * Djet**2 / 4.0_WP)
+
+               if (fs%cfg%amRoot) print *, fs%Umax
                 
                call fs%get_bcond('jet', mybc)
                do n=1,mybc%itr%no_
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-                  r = norm2([pg%ym(j), pg%zm(k)])
-                  fs%U(i,j,k) = U0*log10(2.0_WP*r/Djet) 
+                  r = norm2([fs%cfg%ym(j), fs%cfg%zm(k)])
+                  fs%U(i,j,k) = U0 * (1 - 2.0_WP * r/Djet)**(1.0_WP / 8.0_WP) 
                end do
             end block dirichlet_velocity
              

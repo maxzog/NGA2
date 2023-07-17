@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	4 4 3
+Partition :	1 2 2
 
 # Mesh definition
 Lx :	1.016 # Meters
