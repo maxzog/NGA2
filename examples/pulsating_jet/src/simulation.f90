@@ -38,7 +38,7 @@ module simulation
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
-   real(WP), dimension(:,:,:,:), allocatable :: SR
+   real(WP), dimension(:,:,:,:), allocatable :: SR,vort
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
    
    !> Fluid, forcing, and particle parameters
@@ -155,6 +155,7 @@ module simulation
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR  (1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(vort(1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(gradu(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(tdat(201))
          allocate(qdat(201))
@@ -251,6 +252,7 @@ module simulation
          call fs%get_mfr()
          call fs%correct_mfr()
          call fs%interp_vel(Ui,Vi,Wi)
+         call fs%get_vorticity(vort)
       end block initialize_velocity
       
 !!$      ! Initialize LPT solver
@@ -326,6 +328,7 @@ module simulation
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
+         call ens_out%add_vector('vorticity',vort(1,:,:,:),vort(2,:,:,:),vort(3,:,:,:))
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('visc',sgs%visc)
          !call ens_out%add_particle('particles',pmesh)
@@ -494,6 +497,7 @@ module simulation
          call fs%get_div()
          ! Output to ensight
          if (ens_evt%occurs()) then
+            call fs%get_vorticity(vort)
 !!$            call lp%update_partmesh(pmesh)
 !!$            do ii = 1,lp%np_
 !!$               pmesh%var(1,ii) = lp%p(ii)%id
@@ -524,7 +528,7 @@ module simulation
       ! timetracker
       
       ! Deallocate work arrays
-      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu,tdat,qdat)
+      deallocate(resU,resV,resW,Ui,Vi,Wi,SR,gradu,tdat,qdat,vort)
    end subroutine simulation_final
    
 end module simulation
