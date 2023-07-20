@@ -1,13 +1,13 @@
 # Parallelization
-Partition :	1 2 2
+Partition :	4 4 3
 
 # Mesh definition
-Lx :	1.016 # Meters
+Lx :	0.762 # Meters
 Ly :	0.508 # Meters
 Lz :	0.508 # Meters
-nx :  420
-ny :	420
-nz :  1024
+nx :  512
+ny :	512
+nz :  820
 
 Stretch x : .false.
 Stretch y : .true.
@@ -37,7 +37,7 @@ Max cfl number :    0.1
 Max iter :          25000
 
 # LES
-Use SGS model  : .false.
+Use SGS model  : .true.
 SGS model type : 3
 
 # Solver

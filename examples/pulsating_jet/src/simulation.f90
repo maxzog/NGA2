@@ -52,6 +52,7 @@ module simulation
    real(WP) :: Qt,Q0       ! Volumetric flow rates (time, max)
    real(WP) :: U0          ! Bulk velocity 
    real(WP) :: omegaj,tauj ! Pulse frequency and decay rate
+   real(WP) :: theta       ! Jet inlet momentum thickness
 
    real(WP) :: dt_dat      ! Time step in flow rate data
    real(WP), dimension(:), allocatable :: tdat,qdat ! Flow rate data (time [SEC] and flow rate [SLM])
@@ -194,6 +195,7 @@ module simulation
          fs=incomp(cfg=cfg,name='NS solver')
          ! Get jet diameter
          call param_read('Jet diameter',Djet,default=0.1_WP)
+         theta = 0.5_WP * Djet / 20.0_WP
          call param_read('Flow rate',Q0,default=0.001_WP)
          call param_read('Pulse frequency',omegaj,default=1.0_WP)
          call param_read('Pulse decay time',tauj,default=0.2_WP)
@@ -246,7 +248,7 @@ module simulation
          call fs%get_bcond('jet', mybc)
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=0.5_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP 
+            fs%U(i,j,k)=0.05_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP 
          end do
 
          call fs%get_mfr()
@@ -464,7 +466,7 @@ module simulation
                   i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                   fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
                   r = norm2([fs%cfg%ym(j), fs%cfg%zm(k)])
-                  fs%U(i,j,k) = U0 * (1 - 2.0_WP * r/Djet)**(1.0_WP / 7.0_WP) 
+                  fs%U(i,j,k) = 0.5_WP * U0 * (1.0_WP + TANH(0.5_WP * (0.5_WP * Djet - r) / theta))
                end do
             end block dirichlet_velocity
              
