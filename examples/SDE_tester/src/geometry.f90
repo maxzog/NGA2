@@ -35,7 +35,7 @@ contains
             x(i)=real(i-1,WP)/real(nx,WP)*Lx
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=x,z=x,xper=.true.,yper=.true.,zper=.true.,name='HIT')
+         grid=sgrid(coord=cartesian,no=4,x=x,y=x,z=x,xper=.true.,yper=.true.,zper=.true.,name='HIT')
       end block create_grid
       
       ! Create a config from that grid on our entire group

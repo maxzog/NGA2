@@ -17,6 +17,7 @@ module crw_class
   real(WP), parameter, public :: tke_sgs  = 15.778_WP
   real(WP), parameter, public :: tau_crwi = 3.5702_WP
   real(WP), parameter, public :: C_poz = 1.0_WP
+  real(WP), parameter, public :: Rc = 0.8_WP
 
   integer, parameter, public :: EULER=1
   integer, parameter, public :: PREDCORR=2
@@ -513,11 +514,10 @@ contains
    contains 
 
     function corr_func(r) result(rhoij)
-      real(WP) :: r,rhoij,Rc,sig
+      real(WP) :: r,rhoij,sig
       ! run 1: 0.075
       ! run 2: 0.12
       ! run 3: 0.17
-      Rc  = 0.6_WP
       sig = 2.0_WP*0.17_WP**2
       select case(this%corr_type)
       case(1)
@@ -531,6 +531,8 @@ contains
             rhoij = (exp(-r**2/sig)-exp(-Rc**2/sig))/(1.0_WP - exp(-Rc**2/sig))
          !   rhoij=1.0_WP-2.5_WP*r
          end if
+      case(3)
+         rhoij = EXP(-1.0_WP * r / (2.0_WP * Rc)**2)
       case default
          rhoij = 1.0_WP
       end select
@@ -576,7 +578,7 @@ contains
     spatial_=.false.
     if (present(spatial)) spatial_=spatial
     rdt = sqrt(dt)
-
+    
     ! Zero out number of particles removed
     this%np_out=0
 
@@ -640,7 +642,7 @@ contains
           pold=this%p(i)
           ! Advance with Euler prediction
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt,inst=inst)
-          this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
+          !this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
 
           if (spatial_) then
@@ -683,7 +685,6 @@ contains
 
                            d12  = norm2(r12)
                            corrtp = corr_func(d12)
-
                            if (corrtp.gt.1.0+epsilon(0.0_WP)) then 
                               print *, corrtp
                               call die("[advance] corr > 1")
@@ -703,29 +704,29 @@ contains
 
              call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw,Cs_arr=Cs_arr)
 
-             !> Interpolate divergence of SGS stress tensor to particle location
-             taux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdx,bc='d')
-             tauy = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdy,bc='d')
-             tauz = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdz,bc='d')
-             
-             !> Interpolate the velocity gradient tensor to the particle location
-             gu11 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(1,1,:,:,:),bc='d')
-             gu12 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(1,2,:,:,:),bc='d')
-             gu13 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(1,3,:,:,:),bc='d')
-             gu21 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(2,1,:,:,:),bc='d')
-             gu22 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(2,2,:,:,:),bc='d')
-             gu23 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(2,3,:,:,:),bc='d')
-             gu31 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,1,:,:,:),bc='d')
-             gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
-             gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
-             
-             gux = [gu11,gu21,gu31]
-             guy = [gu12,gu22,gu32]
-             guz = [gu13,gu23,gu33]
-
-             !tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
-             !tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
-             !tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)
+!             !> Interpolate divergence of SGS stress tensor to particle location
+!             taux = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdx,bc='d')
+!             tauy = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdy,bc='d')
+!             tauz = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=dtdz,bc='d')
+!             
+!             !> Interpolate the velocity gradient tensor to the particle location
+!             gu11 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(1,1,:,:,:),bc='d')
+!             gu12 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(1,2,:,:,:),bc='d')
+!             gu13 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(1,3,:,:,:),bc='d')
+!             gu21 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(2,1,:,:,:),bc='d')
+!             gu22 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(2,2,:,:,:),bc='d')
+!             gu23 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(2,3,:,:,:),bc='d')
+!             gu31 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,1,:,:,:),bc='d')
+!             gu32 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,2,:,:,:),bc='d')
+!             gu33 = this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=gradu(3,3,:,:,:),bc='d')
+!             
+!             gux = [gu11,gu21,gu31]
+!             guy = [gu12,gu22,gu32]
+!             guz = [gu13,gu23,gu33]
+!
+!             tmp1 = (-dot_product(this%p(i)%us(:),gux) + taux)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
+!             tmp2 = (-dot_product(this%p(i)%us(:),guy) + tauy)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
+!             tmp3 = (-dot_product(this%p(i)%us(:),guz) + tauz)*mydt + (1.0_WP - a_crw*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)
 
              tmp1 = (1.0_WP - a_crw*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
              tmp2 = (1.0_WP - a_crw*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
@@ -741,7 +742,7 @@ contains
 
           ! Correct with midpoint rule
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt,inst=inst)
-          this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
+          ! this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
 
           ! Stochastic update
@@ -806,11 +807,10 @@ contains
   contains 
 
     function corr_func(r) result(rhoij)
-      real(WP) :: r,rhoij,Rc,sig
+      real(WP) :: r,rhoij,sig
       ! run 1: 0.075
       ! run 2: 0.12
       ! run 3: 0.17
-      Rc  = 0.6_WP
       sig = 2.0_WP*0.17_WP**2
       select case(this%corr_type)
       case(1)
@@ -824,6 +824,8 @@ contains
             rhoij = (exp(-r**2/sig)-exp(-Rc**2/sig))/(1.0_WP - exp(-Rc**2/sig))
          !   rhoij=1.0_WP-2.5_WP*r
          end if
+      case(3)
+         rhoij = EXP(-0.5_WP * r**2 / Rc**2)
       case default
          rhoij = 1.0_WP
       end select

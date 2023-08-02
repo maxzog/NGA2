@@ -346,14 +346,11 @@ contains
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='HIT')
+         ens_out=ensight(cfg=cfg,name='SDE')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
-         call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('pressure',fs%P)
-         call ens_out%add_scalar('visc',sgs%visc)
          call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -431,11 +428,8 @@ contains
          call lptfile%add_column(time%n,'Timestep number')
          call lptfile%add_column(time%t,'Time')
          call lptfile%add_column(lp%np,'Particle number')
-         call lptfile%add_column(lp%Umin,'Particle Umin')
          call lptfile%add_column(lp%Umax,'Particle Umax')
-         call lptfile%add_column(lp%Vmin,'Particle Vmin')
          call lptfile%add_column(lp%Vmax,'Particle Vmax')
-         call lptfile%add_column(lp%Wmin,'Particle Wmin')
          call lptfile%add_column(lp%Wmax,'Particle Wmax')
          call lptfile%add_column(lp%dmin,'Particle dmin')
          ! call lptfile%add_column(lp%dmax,'Particle dmax')
@@ -515,7 +509,7 @@ contains
             call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU, &
                     visc=resV,eddyvisc=sgs%visc,spatial=spatial,      &
                     dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,           &
-                    gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr, SDE_SCHEME=PREDCORR)
+                    gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr, SDE_SCHEME=EULER)
          else
             call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W, &
                     rho=resU,visc=resV,eddyvisc=sgs%visc,           &
