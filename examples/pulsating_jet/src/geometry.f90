@@ -50,7 +50,7 @@ contains
          ! Create simple rectilinear grid
          do i=1,nx+1
             if (stretch_x) then
-               xtilde = 2.0_WP * real(i-1,WP) / real(nx-1,WP) - 1.0_WP
+              xtilde = 2.0_WP * real(i-1,WP) / real(nx-1,WP) - 1.0_WP
                alpha = 0.5_WP * (1.0_WP+sinh(r*xtilde))
                minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
                maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
