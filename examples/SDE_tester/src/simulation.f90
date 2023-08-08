@@ -2,8 +2,8 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   !use hypre_str_class,   only: hypre_str
-   use fourier3d_class,   only: fourier3d
+   use hypre_str_class,   only: hypre_str
+   !use fourier3d_class,   only: fourier3d
    use incomp_class,      only: incomp
    use crw_class,         only: crw
    use timetracker_class, only: timetracker
@@ -18,8 +18,8 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   !type(hypre_str),   public :: ps
-   type(fourier3d),   public :: ps
+   type(hypre_str),   public :: ps
+   !type(fourier3d),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(crw),         public :: lp
@@ -167,11 +167,11 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
-         !ps%maxlevel=10
+         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
+         ps%maxlevel=10
          !call param_read('Pressure iteration',ps%maxit)
          !call param_read('Pressure tolerance',ps%rcvg)
-         ps=fourier3d(cfg=cfg,name='Pressure',nst=7)
+         ! ps=fourier3d(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -509,12 +509,12 @@ contains
             call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU, &
                     visc=resV,eddyvisc=sgs%visc,spatial=spatial,      &
                     dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,           &
-                    gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr, SDE_SCHEME=EULER)
+                    gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr, SDE_SCHEME=PREDCORR)
          else
             call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W, &
                     rho=resU,visc=resV,eddyvisc=sgs%visc,           &
                     spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,      &
-                    dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+                    dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr, SDE_SCHEME=EULER)
          end if
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          

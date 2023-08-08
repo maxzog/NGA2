@@ -15,9 +15,9 @@ module crw_class
 
   !> Pozorski & Apte (2009) model constant
   real(WP), parameter, public :: tke_sgs  = 15.778_WP
-  real(WP), parameter, public :: tau_crwi = 3.5702_WP
+  real(WP), parameter, public :: tau_crwi = 0.5702_WP
   real(WP), parameter, public :: C_poz = 1.0_WP
-  real(WP), parameter, public :: Rc = 0.8_WP
+  real(WP), parameter, public :: Rc = 0.05_WP
 
   integer, parameter, public :: EULER=1
   integer, parameter, public :: PREDCORR=2
@@ -296,7 +296,7 @@ contains
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
-  subroutine advance_tracer(this,dt,U,V,W,rho,visc,eddyvisc,spatial,dtdx,dtdy,dtdz,gradu,SR,Cs_arr)
+  subroutine advance_tracer(this,dt,U,V,W,rho,visc,eddyvisc,spatial,dtdx,dtdy,dtdz,gradu,SR,Cs_arr,SDE_SCHEME)
    use mpi_f08,        only : MPI_SUM,MPI_INTEGER
    use mathtools,      only: Pi
    use random,         only: random_normal
@@ -317,9 +317,9 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: SR        !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradu
    logical, intent(in), optional :: spatial
-   integer :: i,j,k,ierr,no,iold
-   real(WP), dimension(3) :: b_ij,gux,guy,guz,tau
-   real(WP) :: deng,rdt,tke,sig_sg,tau_crwi,a_crw,b_crw,corr,corrsum,rmydt
+   integer :: i,j,k,ierr,no,iold,SDE_SCHEME
+   real(WP), dimension(3) :: b_ij,gux,guy,guz,tau,a_ij,uj
+   real(WP) :: deng,rdt,tke,sig_sg,tau_crwi,a_crw,a_crw_np1,b_crw,corr,corrsum,rmydt,Vsum
    real(WP) :: tmp1,tmp2,tmp3,taux,tauy,tauz,gu11,gu12,gu13,gu21,gu22,gu23,gu31,gu32,gu33
    real(WP), dimension(3) :: acc,dmom,dW
    integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
@@ -402,8 +402,10 @@ contains
            r1=this%p(i)%pos
 
            ! Zero out neighbor contribution
+           a_ij    = 0.0_WP
            b_ij    = 0.0_WP
            corrsum = 0.0_WP
+           Vsum    = 0.0_WP
 
            do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
               do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
@@ -417,10 +419,12 @@ contains
                        if (i2.gt.0) then
                           r2=this%p(i2)%pos
                           dW=this%p(i2)%dW
+                          uj=this%p(i2)%us
                        else if (i2.lt.0) then
                           i2=-i2
                           r2=this%g(i2)%pos
                           dW=this%g(i2)%dW
+                          uj=this%g(i2)%us
                        end if
 
                        ! Compute relative information
@@ -441,8 +445,13 @@ contains
                           call die("[advance] corr < 0")
                        end if
 
+                       a_ij(1) = a_ij(1) - r12(1) * corrtp * (uj(1) - this%p(i)%us(1))**2 / Rc**2   
+                       a_ij(2) = a_ij(2) - r12(2) * corrtp * (uj(2) - this%p(i)%us(2))**2 / Rc**2  
+                       a_ij(3) = a_ij(3) - r12(3) * corrtp * (uj(3) - this%p(i)%us(3))**2 / Rc**2  
+
                        corrsum = corrsum + corrtp**2   ! Kernel normalization
-                       b_ij = b_ij + corrtp*dW*rdt   ! Neighbor correlation 
+                       Vsum = Vsum + corrtp
+                       b_ij = b_ij + corrtp*dW!*rdt     ! Neighbor correlation 
                     end do
                  end do
               end do
@@ -450,11 +459,14 @@ contains
          end block correlate_neighbors
 
          call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw,Cs_arr=Cs_arr)
-
-         tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)
-         tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)
-         tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)
-
+         Vsum = Vsum !* 2.0_WP * sqrt(2.0_WP) * 3.1459_WP**(1.5_WP) / (1/Rc**2)**(1.5_WP)
+         !tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + a_ij(1)*dt/Vsum + b_ij(1)/sqrt(corrsum)
+         !tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + a_ij(2)*dt/Vsum + b_ij(2)/sqrt(corrsum)
+         !tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + a_ij(3)*dt/Vsum + b_ij(3)/sqrt(corrsum)
+         !if (this%p(i)%id.eq.1) print *, a_ij(1)
+         tmp1 = b_ij(1)/sqrt(corrsum)
+         tmp2 = b_ij(2)/sqrt(corrsum)
+         tmp3 = b_ij(3)/sqrt(corrsum)
       else
 
          call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw,Cs_arr=Cs_arr)
@@ -468,10 +480,18 @@ contains
       this%p(i)%vel=this%p(i)%us
       this%p(i)%pos=pold%pos+dt*this%p(i)%vel
 
-      ! S!tochastic update
-      this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
-      this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
-      this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
+      ! Stochastic update
+      select case (SDE_SCHEME)
+        case (EULER)
+           this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
+           this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
+           this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
+        case (PREDCORR) 
+           call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw_np1,Cs_arr=Cs_arr)
+           this%p(i)%us(1) = this%p(i)%us(1) - (alpha * a_crw_np1 * tmp1 + (1.0_WP - alpha) * a_crw * this%p(i)%us(1))*dt + b_ij(1)/sqrt(corrsum)! this%p(i)%dW(1)*rmydt
+           this%p(i)%us(2) = this%p(i)%us(2) - (alpha * a_crw_np1 * tmp2 + (1.0_WP - alpha) * a_crw * this%p(i)%us(2))*dt + b_ij(2)/sqrt(corrsum)! this%p(i)%dW(2)*rmydt
+           this%p(i)%us(3) = this%p(i)%us(3) - (alpha * a_crw_np1 * tmp3 + (1.0_WP - alpha) * a_crw * this%p(i)%us(3))*dt + b_ij(3)/sqrt(corrsum)! this%p(i)%dW(3)*rmydt
+      end select
 
       ! Relocalize
       this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
@@ -532,7 +552,7 @@ contains
          !   rhoij=1.0_WP-2.5_WP*r
          end if
       case(3)
-         rhoij = EXP(-1.0_WP * r / (2.0_WP * Rc)**2)
+         rhoij = EXP(-0.5_WP * r**2 / Rc**2)
       case default
          rhoij = 1.0_WP
       end select
@@ -642,7 +662,7 @@ contains
           pold=this%p(i)
           ! Advance with Euler prediction
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt,inst=inst)
-          !this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
+          this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
 
           if (spatial_) then
@@ -742,7 +762,7 @@ contains
 
           ! Correct with midpoint rule
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt,inst=inst)
-          ! this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
+          this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
           this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
 
           ! Stochastic update
@@ -753,9 +773,9 @@ contains
                this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
             case (PREDCORR) 
                call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw_np1,Cs_arr=Cs_arr)
-               this%p(i)%us(1) = this%p(i)%us(1) - (alpha * a_crw_np1 * tmp1 + (1.0_WP - alpha) * a_crw * this%p(i)%us(1))*mydt + this%p(i)%dW(1)*rmydt
-               this%p(i)%us(2) = this%p(i)%us(2) - (alpha * a_crw_np1 * tmp2 + (1.0_WP - alpha) * a_crw * this%p(i)%us(2))*mydt + this%p(i)%dW(2)*rmydt
-               this%p(i)%us(3) = this%p(i)%us(3) - (alpha * a_crw_np1 * tmp3 + (1.0_WP - alpha) * a_crw * this%p(i)%us(3))*mydt + this%p(i)%dW(3)*rmydt
+               this%p(i)%us(1) = this%p(i)%us(1) - (alpha * a_crw_np1 * tmp1 + (1.0_WP - alpha) * a_crw * this%p(i)%us(1))*mydt + b_ij(1)/sqrt(corrsum)! this%p(i)%dW(1)*rmydt
+               this%p(i)%us(2) = this%p(i)%us(2) - (alpha * a_crw_np1 * tmp2 + (1.0_WP - alpha) * a_crw * this%p(i)%us(2))*mydt + b_ij(2)/sqrt(corrsum)! this%p(i)%dW(2)*rmydt
+               this%p(i)%us(3) = this%p(i)%us(3) - (alpha * a_crw_np1 * tmp3 + (1.0_WP - alpha) * a_crw * this%p(i)%us(3))*mydt + b_ij(3)/sqrt(corrsum)! this%p(i)%dW(3)*rmydt
           end select
 
           ! Relocalize
