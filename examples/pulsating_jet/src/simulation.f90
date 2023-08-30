@@ -11,7 +11,7 @@ module simulation
    use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
-   use sgsmodel_class,    only: sgsmodel
+!   use sgsmodel_class,    only: sgsmodel
    use datafile_class,    only: datafile
    use string,            only: str_medium
    implicit none
@@ -23,7 +23,7 @@ module simulation
    type(ddadi),       public :: vs
    type(timetracker), public :: time
    type(lpt),         public :: lp
-   type(sgsmodel),    public :: sgs
+!   type(sgsmodel),    public :: sgs
    
    !> Ensight postprocessing
    type(partmesh) :: pmesh
@@ -260,13 +260,13 @@ module simulation
          call fs%setup(pressure_solver=ps, implicit_solver=vs)
       end block create_and_initialize_flow_solver
 
-      ! Create an LES model
-      create_sgs: block
-         call param_read(tag='Use SGS model',val=use_sgs,default=.false.)
-         if (use_sgs) call param_read('SGS model type',sgs_type)
-         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-         sgs%Cs_ref=0.1_WP
-      end block create_sgs
+!      ! Create an LES model
+!      create_sgs: block
+!         call param_read(tag='Use SGS model',val=use_sgs,default=.false.)
+!         if (use_sgs) call param_read('SGS model type',sgs_type)
+!         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+!         sgs%Cs_ref=0.1_WP
+!      end block create_sgs
 
       ! Prepare initial velocity field
       initialize_velocity: block
@@ -372,7 +372,7 @@ module simulation
       ! Add Ensight output
       create_ensight: block
          ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='HIT')
+         ens_out=ensight(cfg=cfg,name='pjet')
          ! Create event for Ensight output
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
@@ -381,8 +381,6 @@ module simulation
          call ens_out%add_vector('vorticity',vort(1,:,:,:),vort(2,:,:,:),vort(3,:,:,:))
          call ens_out%add_scalar('pressure',fs%P)
          call ens_out%add_scalar('divergence',fs%div)
-                 !call ens_out%add_scalar('visc',sgs%visc)
-         !call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -451,19 +449,19 @@ module simulation
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Turbulence modeling
-         call fs%interp_vel(Ui,Vi,Wi)
-         if (use_sgs) then
-            fs%visc=visc
-            call fs%get_strainrate(SR=SR)
-            call fs%get_gradu(gradu=gradu)
-            resU=fs%rho
-            call sgs%get_visc(type=sgs_type,rho=resU,gradu=gradu,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
-            where (sgs%visc.lt.-fs%visc)
-               sgs%visc=-fs%visc
-            end where
-            fs%visc=fs%visc+sgs%visc
-         end if
+!         ! Turbulence modeling
+!         call fs%interp_vel(Ui,Vi,Wi)
+!         if (use_sgs) then
+!            fs%visc=visc
+!            call fs%get_strainrate(SR=SR)
+!            call fs%get_gradu(gradu=gradu)
+!            resU=fs%rho
+!            call sgs%get_visc(type=sgs_type,rho=resU,gradu=gradu,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
+!            where (sgs%visc.lt.-fs%visc)
+!               sgs%visc=-fs%visc
+!            end where
+!            fs%visc=fs%visc+sgs%visc
+!         end if
 
          
          ! Perform sub-iterations
@@ -535,7 +533,7 @@ module simulation
             call fs%get_mfr()
             call fs%correct_mfr()
             call fs%get_div()
-            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dt
+            fs%psolv%rhs=-fs%cfg%vol*fs%div*fs%rho/time%dt
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)

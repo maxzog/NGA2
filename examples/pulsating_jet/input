@@ -5,7 +5,7 @@ Partition : 8 6 1
 # Mesh definition
 Lx :	1.22 # Meters
 Ly :	0.4064 #0.254 # Meters
-Lz :	0.005 # Meters
+Lz :	1e-4 # Meters
 nx : 	1536
 ny :	512
 nz :  1
@@ -34,8 +34,8 @@ Number of particles :   0 #10000 #10000 # 250000
 Use CRW :              .false.
 
 # Time integration
-Max timestep size : 1e-4
-Max cfl number :    0.05
+Max timestep size : 1e-3
+Max cfl number :    0.8
 Max iter :          999999
 Max time :          0.2
 
