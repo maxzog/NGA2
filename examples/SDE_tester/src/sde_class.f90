@@ -553,6 +553,8 @@ contains
          end if
       case(3)
          rhoij = EXP(-0.5_WP * r**2 / Rc**2)
+      case(4)
+         rhoij = 1.0_WP - EXP(-0.5_WP / (5.0_WP * r)**2) 
       case default
          rhoij = 1.0_WP
       end select
