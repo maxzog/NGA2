@@ -245,8 +245,8 @@ module simulation
          call fs%add_bcond(name='right', type=clipped_neumann,locator=right_of_domain,face='x',dir=+1,canCorrect=.true.)
          call fs%add_bcond(name='bottom',type=slip, locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
          call fs%add_bcond(name='top',   type=slip, locator=top_of_domain,face='y',dir=+1,canCorrect=.false.)
-         !call fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=+1,canCorrect=.false.)
-         !call fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=+1,canCorrect=.false.)
+         call fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=-1,canCorrect=.false.)
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -282,7 +282,7 @@ module simulation
          ! Zero initial velocity field
          Qt = qdat(1)
          U0 = Qt / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
-         Uco = 0.05_WP !* U0
+         Uco = 0.05_WP * U0
         ! U0 = 1.0_WP
         ! Uco = 0.01_WP
          fs%U=0.0_WP; fs%V=0.0_WP; fs%W=0.0_WP
@@ -504,10 +504,10 @@ module simulation
               if (jp.lt.1500) then
                  Qt = (qdat(jp) - qdat(jn)) / (tdat(jp) - tdat(jn)) * (time%t - tdat(jn)) + qdat(jn) 
                  U0 = Qt / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
-                 Uco = 0.05_WP! * U0
-              else
-                 Uco = 0.05_WP
-                 U0 = Uco
+                 Uco = 0.05_WP * U0
+              !else
+              !   Uco = 0.05_WP
+              !   U0 = Uco
               end if
               !U0 = 1.0_WP
               !Uco = 0.01_WP
