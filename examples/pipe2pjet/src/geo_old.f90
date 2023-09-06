@@ -58,7 +58,7 @@ contains
                minAlpha = 0.5_WP * (1.0_WP + sinh(-r))
                maxAlpha = 0.5_WP * (1.0_WP + sinh(r))
                alpha = (alpha-minAlpha)/(maxAlpha-minAlpha)
-               x(i) = Lx * alpha + D - !!!! TODO
+               x(i) = Lx * alpha + D !- !!!! TODO
             else
                x(i)=real(i-1,WP)/real(nx,WP)*Lx
             end if

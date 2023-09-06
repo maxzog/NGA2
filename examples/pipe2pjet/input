@@ -1,20 +1,30 @@
 # Parallelization
-Partition : 8 6 1
+Partition : 4 1 1
 # Partition : 2 2 2
 
 # Mesh definition
-Lx :	1.22 # Meters
-Ly :	0.4064 #0.254 # Meters
-Lz :	1e-4 # Meters
-nx : 	1536
-ny :	512
-nz :  1
+Jet Lx :	1.22 # Meters
+Jet Ly :	0.4064 #0.254 # Meters
+Jet Lz :	1e-4 # Meters
+
+Jet nx : 40
+Jet ny :	20
+Jet nz : 1
+
+Pipe nx : 40
+Pipe ny : 20
+Pipe nz : 1
 
 Stretch x : .false.
 Stretch y : .false.
 Stretch z : .false.
 
 Stretch factor : 1.5
+
+Overlap : 0.2
+
+# Pipe
+Pipe length : 1.0
 
 # Jet
 Flow rate        : 225.0  # SLM

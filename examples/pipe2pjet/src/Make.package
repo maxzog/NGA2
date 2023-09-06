@@ -1,2 +1,2 @@
 # List here the extra files here
-f90EXE_sources += gl_simulation.f90 flowrate.f90
+f90EXE_sources += main.f90 simulation.f90 
