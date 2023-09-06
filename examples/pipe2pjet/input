@@ -1,0 +1,56 @@
+# Parallelization
+Partition : 8 6 1
+# Partition : 2 2 2
+
+# Mesh definition
+Lx :	1.22 # Meters
+Ly :	0.4064 #0.254 # Meters
+Lz :	1e-4 # Meters
+nx : 	1536
+ny :	512
+nz :  1
+
+Stretch x : .false.
+Stretch y : .false.
+Stretch z : .false.
+
+Stretch factor : 1.5
+
+# Jet
+Flow rate        : 225.0  # SLM
+Pulse frequency  : 15.5   # 1/Seconds
+Pulse decay time : 0.7    # Seconds
+Jet diameter     : 0.0254 # Meters
+# Coflow velocity  : 0.05   # Meters/Second
+
+# Fluid properties
+Dynamic viscosity :    1.825E-05
+Density :              1.204
+
+# Particle properties
+Particle density :     1000
+Particle Stokes number :    1.0
+Number of particles :   0 #10000 #10000 # 250000
+Use CRW :              .false.
+
+# Time integration
+Max timestep size : 1e-3
+Max cfl number :    0.8
+Max iter :          999999
+Max time :          0.2
+
+# LES
+Use SGS model  : .false.
+SGS model type : 3
+
+# Solver
+Pressure iteration : 100
+Pressure tolerance : 1e-8
+
+# Ensight output
+Ensight output period : 0.0025
+
+# Restart config
+Restart sim : .false.
+# Restart from : 1.00044E-02
+Restart output period : 1.0
