@@ -3,20 +3,22 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg,D,get_VF
    use hypre_str_class,   only: hypre_str
-   use fourier3d_class,   only: fourier3d
+   use fft3d_class,       only: fft3d
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
    use monitor_class,     only: monitor
+   use datafile_class,    only: datafile
+   use string,            only: str_medium
    implicit none
    private
    
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
    type(incomp),      public :: fs
    !type(hypre_str),   public :: ps
-   type(fourier3d),   public :: ps
+   type(fft3d),       public :: ps
    type(hypre_str),   public :: vs
    type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
@@ -24,6 +26,11 @@ module simulation
    !> Ensight postprocessing
    type(ensight)  :: ens_out
    type(event)    :: ens_evt
+
+   !> Provide a datafile and an event tracker for saving restarts
+   type(event)    :: save_evt
+   type(datafile) :: df
+   logical :: restarted
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
@@ -103,7 +110,7 @@ contains
          call param_read('Density',fs%rho)
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Configure pressure solver
-         ps=fourier3d(cfg=cfg,name='Pressure',nst=7)
+         ps=fft3d(cfg=cfg,name='Pressure',nst=7)
          !ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg,nst=7)
          !ps%maxlevel=14
          !call param_read('Pressure iteration',ps%maxit)
@@ -128,7 +135,32 @@ contains
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(G   (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
       end block allocate_work_arrays
-      
+
+      ! Handle restart/saves here
+      restart_and_save: block
+        character(len=str_medium) :: timestamp
+        ! Create event for saving restart files
+        save_evt=event(time,'Restart output')
+        call param_read('Restart output period',save_evt%tper)
+        ! Check if we are restarting
+        call param_read(tag='Restart from',val=timestamp,short='r',default='')
+        restarted=.false.; if (len_trim(timestamp).gt.0) restarted=.true.
+        if (restarted) then
+           ! If we are, read the name of the directory
+           call param_read('Restart from',timestamp,'r')
+           ! Read the datafile
+           df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
+        else
+           ! If we are not restarting, we will still need a datafile for saving restart files
+           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
+           df%valname(1)='t'
+           df%valname(2)='dt'
+           df%varname(1)='U'
+           df%varname(2)='V'
+           df%varname(3)='W'
+           df%varname(4)='P'
+        end if
+      end block restart_and_save
       
       ! Initialize our velocity field
       initialize_velocity: block
@@ -141,15 +173,22 @@ contains
          fs%U=Ubulk; fs%V=0.0_WP; fs%W=0.0_WP; fs%P=0.0_WP
          ! For faster transition
          call param_read('Fluctuation amp',amp,default=0.0_WP)
-         do k=fs%cfg%kmin_,fs%cfg%kmax_
-            do j=fs%cfg%jmin_,fs%cfg%jmax_
-               do i=fs%cfg%imin_,fs%cfg%imax_
-                  fs%U(i,j,k)=fs%U(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
-                  fs%V(i,j,k)=fs%V(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
-                  fs%W(i,j,k)=fs%W(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+         if (restarted) then
+            call df%pullvar(name='U',var=fs%U)
+            call df%pullvar(name='V',var=fs%V)
+            call df%pullvar(name='W',var=fs%W)
+            call df%pullvar(name='P',var=fs%P)
+         else
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     fs%U(i,j,k)=fs%U(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
+                     fs%V(i,j,k)=fs%V(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                     fs%W(i,j,k)=fs%W(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                  end do
                end do
             end do
-         end do
+         end if
          call fs%cfg%sync(fs%U)
          call fs%cfg%sync(fs%V)
          call fs%cfg%sync(fs%W)
@@ -360,6 +399,27 @@ contains
          call fs%get_max()
          call mfile%write()
          call cflfile%write()
+
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            save_restart: block
+              character(len=str_medium) :: timestamp
+              ! Prefix for files
+              write(timestamp,'(es12.5)') time%t
+              ! Prepare a new directory
+              if (fs%cfg%amRoot) call execute_command_line('mkdir -p restart')
+              ! Populate df and write it
+              call df%pushval(name='t' ,val=time%t     )
+              call df%pushval(name='dt',val=time%dt    )
+              call df%pushvar(name='U' ,var=fs%U       )
+              call df%pushvar(name='V' ,var=fs%V       )
+              call df%pushvar(name='W' ,var=fs%W       )
+              call df%pushvar(name='P' ,var=fs%P       )
+              call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
+              ! Write particle file
+              ! call lp%write(filename='restart/part_'//trim(adjustl(timestamp)))
+            end block save_restart
+         end if
          
       end do
       
