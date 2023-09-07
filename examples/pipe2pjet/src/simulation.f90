@@ -5,6 +5,7 @@ module simulation
    use parallel,          only: rank, amRoot
    use hypre_str_class,   only: hypre_str
    use fft3d_class,       only: fft3d
+   use fft2d_class,       only: fft2d
    use config_class,      only: config
    use ddadi_class,       only: ddadi
    use incomp_class,      only: incomp
@@ -49,7 +50,8 @@ module simulation
    end type pipedomain
 
    type, extends(gendomain) :: pjetdomain
-     type(hypre_str)   :: ps
+     ! type(hypre_str)   :: ps
+     type(fft2d)       :: ps
      type(ddadi)       :: vs
    end type pjetdomain
 
@@ -397,7 +399,7 @@ module simulation
             end if
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jet')
+         grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='jet')
          deallocate(x, y, z)
          ! Read in partition
          call param_read('Jet Partition',partition,short='p')
@@ -415,7 +417,8 @@ module simulation
 
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: smg,pcg_pfmg,pfmg,gmres_smg
+         ! use hypre_str_class, only: smg,pcg_pfmg,pfmg,gmres_smg
+         use fft2d_class,     only: fft2d
          use incomp_class,    only: clipped_neumann, dirichlet, slip
          ! Create flow solver
          pjet%fs=incomp(cfg=pjet%cfg,name='NS solver')
@@ -428,19 +431,20 @@ module simulation
          ! Add BCs
          call pjet%fs%add_bcond(name='jet',   type=dirichlet,locator=jet_loc,face='x',dir=-1,canCorrect=.false. )
          call pjet%fs%add_bcond(name='right', type=clipped_neumann,locator=right_of_domain,face='x',dir=+1,canCorrect=.true.)
-         call pjet%fs%add_bcond(name='bottom',type=slip, locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
-         call pjet%fs%add_bcond(name='top',   type=slip, locator=top_of_domain,face='y',dir=+1,canCorrect=.false.)
-         call pjet%fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=+1,canCorrect=.false.)
-         call pjet%fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=-1,canCorrect=.false.)
+         !call pjet%fs%add_bcond(name='bottom',type=slip, locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
+         !call pjet%fs%add_bcond(name='top',   type=slip, locator=top_of_domain,face='y',dir=+1,canCorrect=.false.)
+         !call pjet%fs%add_bcond(name='front', type=slip, locator=front_of_domain,face='z',dir=+1,canCorrect=.false.)
+         !call pjet%fs%add_bcond(name='back',  type=slip, locator=back_of_domain,face='z',dir=-1,canCorrect=.false.)
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); pjet%fs%visc=visc
          ! Assign constant density
          call param_read('Density',pjet%fs%rho)
          ! Prepare and configure pressure solver
          pjet%vs=ddadi(cfg=pjet%cfg,name='Velocity',nst=7)
-         pjet%ps=hypre_str(cfg=pjet%cfg,name='Pressure',method=smg,nst=7)
-         call param_read('Pressure iteration',pjet%ps%maxit)
-         call param_read('Pressure tolerance',pjet%ps%rcvg)
+         ! pjet%ps=hypre_str(cfg=pjet%cfg,name='Pressure',method=smg,nst=7)
+         pjet%ps=fft2d(cfg=pjet%cfg,name='Pressure',nst=7)
+         ! call param_read('Pressure iteration',pjet%ps%maxit)
+         ! call param_read('Pressure tolerance',pjet%ps%rcvg)
          ! Setup the solver
          call pjet%fs%setup(pressure_solver=pjet%ps, implicit_solver=pjet%vs)
       end block create_and_initialize_flow_solver
