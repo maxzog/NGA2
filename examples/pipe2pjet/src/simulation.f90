@@ -400,7 +400,7 @@ module simulation
          grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.false.,name='jet')
          deallocate(x, y, z)
          ! Read in partition
-         call param_read('Partition',partition,short='p')
+         call param_read('Jet Partition',partition,short='p')
          ! Create partitioned grid
          pjet%cfg=config(grp=group,decomp=partition,grid=grid)
          pjet%cfg%VF=1.0_WP
@@ -623,7 +623,7 @@ module simulation
          integer, dimension(3) :: partition
          
          ! Read in partition
-         call param_read('Partition',partition,short='p')
+         call param_read('Pipe Partition',partition,short='p')
          
          ! Create partitioned grid
          pipe%cfg=config(grp=group,decomp=partition,grid=grid)
@@ -718,7 +718,7 @@ module simulation
       integer :: ii, it
       ! Perform time integration
       do while (.not.time%done())
-         print *, "ITERATING"
+         
          ! Increment time
          call pipe%fs%get_cfl(time%dt,pipe%cfl)
          call pjet%fs%get_cfl(time%dt,pjet%cfl)
