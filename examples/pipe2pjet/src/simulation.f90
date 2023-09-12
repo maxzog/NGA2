@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
 !   use geometry,          only: cfg
-   use parallel,          only: rank, amRoot
+   use parallel,          only: rank, amRoot, group, comm
    use hypre_str_class,   only: hypre_str
    use fft3d_class,       only: fft3d
    use fft2d_class,       only: fft2d
@@ -18,6 +18,7 @@ module simulation
    use datafile_class,    only: datafile
    use string,            only: str_medium
    use coupler_class,     only: coupler
+   use mpi_f08,           only: MPI_GROUP, MPI_UNDEFINED
    implicit none
    private
    
@@ -26,6 +27,7 @@ module simulation
    type(timetracker) :: time
    type(event)    :: ens_evt
    type(datafile) :: df
+   type(MPI_GROUP) :: pipegrp, pjetgrp
 
    ! General domain type definition
    type :: gendomain
@@ -76,6 +78,11 @@ module simulation
    
    real(WP), public :: dt_dat      ! Time step in flow rate data
    real(WP), dimension(:), allocatable, public :: tdat,qdat ! Flow rate data (time [SEC] and flow rate [SLM])
+   
+   integer, dimension(3) :: pipepart
+   integer, dimension(3) :: pjetpart
+   integer :: pjetRank, pipeRank
+   logical :: inpjetGrp, inpipeGrp
 
  contains
       
@@ -325,7 +332,7 @@ module simulation
     end subroutine write_gendom_monitors
 
    !> Initializes pjet domain stretched grid
-   subroutine pjet_geometry_init
+   subroutine pjet_geometry_init()
       use sgrid_class, only: sgrid
       use param,       only: param_read
       use parallel,    only: group
@@ -343,7 +350,6 @@ module simulation
          real(WP), dimension(:), allocatable :: x
          real(WP), dimension(:), allocatable :: y
          real(WP), dimension(:), allocatable :: z
-         integer, dimension(3) :: partition
          ! Read in grid definition
          call param_read('Jet diameter',Djet,default=0.1_WP)
          call param_read('Jet Lx',Lx)
@@ -401,10 +407,8 @@ module simulation
          ! General serial grid object
          grid=sgrid(coord=cartesian,no=1,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='jet')
          deallocate(x, y, z)
-         ! Read in partition
-         call param_read('Jet Partition',partition,short='p')
          ! Create partitioned grid
-         pjet%cfg=config(grp=group,decomp=partition,grid=grid)
+         pjet%cfg=config(grp=pjetgrp,decomp=pjetpart,grid=grid)
          pjet%cfg%VF=1.0_WP
       end block create_grid
    end subroutine pjet_geometry_init
@@ -448,7 +452,7 @@ module simulation
          ! Setup the solver
          call pjet%fs%setup(pressure_solver=pjet%ps, implicit_solver=pjet%vs)
       end block create_and_initialize_flow_solver
-      
+
       ! Prepare initial velocity field
       initialize_velocity: block
          use incomp_class, only: bcond
@@ -572,7 +576,7 @@ module simulation
    end subroutine pipe_init
    
    !> Initialization of problem geometry
-   subroutine pipe_geometry_init
+   subroutine pipe_geometry_init()
       use sgrid_class, only: sgrid
       use param,       only: param_read
       implicit none
@@ -584,14 +588,15 @@ module simulation
          integer :: i,j,k,nx,ny,nz,no
          real(WP) :: Lx,Ly,Lz,dx,overlap
          real(WP), dimension(:), allocatable :: x,y,z
-         
+       
          ! Read in grid definition
+         call param_read('Jet diameter', Djet)
          call param_read('Pipe length',Lx)
          call param_read('Overlap', overlap)
          call param_read('Pipe nx',nx); allocate(x(nx+1))
          call param_read('Pipe ny',ny); allocate(y(ny+1))
          call param_read('Pipe nz',nz); allocate(z(nz+1))
-
+          
          dx=Lx/real(nx,WP)
          no=6
          if (ny.gt.1) then
@@ -624,13 +629,8 @@ module simulation
       ! Create a config from that grid on our entire group
       create_cfg: block
          use parallel, only: group
-         integer, dimension(3) :: partition
-         
-         ! Read in partition
-         call param_read('Pipe Partition',partition,short='p')
-         
          ! Create partitioned grid
-         pipe%cfg=config(grp=group,decomp=partition,grid=grid)
+         pipe%cfg=config(grp=pipegrp,decomp=pipepart,grid=grid)
       end block create_cfg
       
       ! Create masks for this config
@@ -669,17 +669,59 @@ module simulation
 
    !> Initialization of problem solver
    subroutine simulation_init
-      use param, only: param_read
+      use param,     only: param_read
+      use parallel,  only: group, comm, nproc, rank
       implicit none
+      integer :: n, npipe, npjet, ierr, rr
 
-      ! Initialize domain geometries
-      call pjet_geometry_init()
-      call pipe_geometry_init()
+      call param_read('Pipe Partition',pipepart,short='p')
+      call param_read('Jet Partition' ,pjetpart,short='p')
 
-      ! Allocate work arrays
-      call gendomain_allocate(pipe)
-      call gendomain_allocate(pjet)
+      npipe = product(pipepart); npjet = product(pjetpart)
+      n = nproc
 
+      ! Setup separate domain partitions
+      call MPI_GROUP_INCL(group, npipe, [0,npipe-1,1], pipegrp, ierr)
+      call MPI_GROUP_INCL(group, npjet, [npipe,n-1,1], pjetgrp, ierr)
+
+      call MPI_GROUP_RANK(pjetgrp, pjetRank, ierr)
+      call MPI_GROUP_RANK(pipegrp, pipeRank, ierr)
+
+      call allocate_flowrate()
+      call define_flowrate()
+
+      dom_cpl = coupler(src_grp=pipegrp, dst_grp=pjetgrp,name='Domain Coupler')
+      
+      inpjetGrp = .false.
+      if (pjetRank /= MPI_UNDEFINED) then
+         inpjetGrp = .true.
+         call pjet_geometry_init()
+         call gendomain_allocate(pjet)
+         call pjet_init()
+         call setup_gendom_monitors(pjet)
+         call setup_ens(pjet)
+         call dom_cpl%set_dst(pjet%cfg)
+      end if
+      inpipeGrp = .false. 
+      if (pipeRank /= MPI_UNDEFINED) then
+         inpipeGrp = .true.
+         call pipe_geometry_init()
+         call gendomain_allocate(pipe)
+         call pipe_init()
+         call setup_gendom_monitors(pipe)
+         call setup_ens(pipe)
+         call dom_cpl%set_src(pipe%cfg)
+      end if
+      call dom_cpl%initialize()
+
+      ! ! Initialize domain geometries
+      ! if (inpjetGrp) call pjet_geometry_init()
+      ! if (inpipeGrp) call pipe_geometry_init()
+      !
+      ! ! Allocate work arrays
+      ! if (inpipeGrp) call gendomain_allocate(pipe)
+      ! if (inpjetGrp) call gendomain_allocate(pjet)
+      
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          time=timetracker(amRoot=amRoot)
@@ -692,25 +734,15 @@ module simulation
 
       ! Initialize solvers
 
-      call allocate_flowrate()
-      call define_flowrate()
 
-      call pjet_init()
-      call pipe_init()
+      ! if (inpjetGrp) call pjet_init()
+      ! if (inpipeGrp) call pipe_init()
 
-      ! Set up domain couplers
-      dom_cpl = coupler(src_grp=pipe%cfg%group, dst_grp=pjet%cfg%group,name='Domain Coupler')
-      call dom_cpl%set_src(pipe%cfg)
-      if (.true.) then    ! all tasks are in the destination group
-         call dom_cpl%set_dst(pjet%cfg)
-      end if
-      call dom_cpl%initialize()
-
-      call setup_ens(pjet)
-      call setup_ens(pipe)
-      
-      call setup_gendom_monitors(pjet)
-      call setup_gendom_monitors(pipe)
+      ! if (inpjetGrp) call setup_ens(pjet)
+      ! if (inpipeGrp) call setup_ens(pipe)
+      ! 
+      ! if (inpjetGrp) call setup_gendom_monitors(pjet)
+      ! if (inpipeGrp) call setup_gendom_monitors(pipe)
 
    end subroutine simulation_init
    
@@ -720,193 +752,204 @@ module simulation
       use parallel,       only: parallel_time
       implicit none
       integer :: ii, it
+      real(WP) :: pipeCFL, pjetCFL
       ! Perform time integration
       do while (.not.time%done())
+
          
          ! Increment time
-         call pipe%fs%get_cfl(time%dt,pipe%cfl)
-         call pjet%fs%get_cfl(time%dt,pjet%cfl)
-         time%cfl = max(pipe%cfl, pjet%cfl)
+         if (inpipeGrp) call pipe%fs%get_cfl(time%dt,pipeCFL)
+         if (inpipeGrp) call pipe%fs%get_cfl(time%dt,pipe%cfl)
+         if (inpjetGrp) call pjet%fs%get_cfl(time%dt,pjetCFL)
+         if (inpjetGrp) call pjet%fs%get_cfl(time%dt,pjet%cfl)
+         pjetCFL=0.01_WP 
+         pipeCFL=0.01_WP 
+         time%cfl = max(pipeCFL, pjetCFL)
          call time%adjust_dt()
          call time%increment()
 
          !! PIPE STEP
-         ! Remember old velocity
-         pipe%fs%Uold=pipe%fs%U
-         pipe%fs%Vold=pipe%fs%V
-         pipe%fs%Wold=pipe%fs%W
+         if (inpipeGrp) then
+          ! Remember old velocity
+          pipe%fs%Uold=pipe%fs%U
+          pipe%fs%Vold=pipe%fs%V
+          pipe%fs%Wold=pipe%fs%W
+          
+          ! Perform sub-iterations
+          do it = 1, time%itmax
+             ! Build mid-time velocity
+             pipe%fs%U=0.5_WP*(pipe%fs%U+pipe%fs%Uold)
+             pipe%fs%V=0.5_WP*(pipe%fs%V+pipe%fs%Vold)
+             pipe%fs%W=0.5_WP*(pipe%fs%W+pipe%fs%Wold)
+             
+             ! Explicit calculation of drho*u/dt from NS
+             call pipe%fs%get_dmomdt(pipe%resU,pipe%resV,pipe%resW)
+             
+             ! Assemble explicit residual
+             pipe%resU=-2.0_WP*(pipe%fs%rho*pipe%fs%U-pipe%fs%rho*pipe%fs%Uold)+time%dt*pipe%resU
+             pipe%resV=-2.0_WP*(pipe%fs%rho*pipe%fs%V-pipe%fs%rho*pipe%fs%Vold)+time%dt*pipe%resV
+             pipe%resW=-2.0_WP*(pipe%fs%rho*pipe%fs%W-pipe%fs%rho*pipe%fs%Wold)+time%dt*pipe%resW
+             
+             ! Add body forcing
+             bodyforcing: block
+                real(WP) :: mfr
+                pipe%mfr=get_bodyforce_mfr(pipe%resU)
+                pipe%bforce=(pipe%mfr_target-pipe%mfr)/time%dtmid
+                pipe%resU=pipe%resU+time%dt*pipe%bforce
+             end block bodyforcing
+
+             ! Form implicit residuals
+             call pipe%fs%solve_implicit(time%dt,pipe%resU,pipe%resV,pipe%resW)
+             
+             ! Apply these residuals
+             pipe%fs%U=2.0_WP*pipe%fs%U-pipe%fs%Uold+pipe%resU
+             pipe%fs%V=2.0_WP*pipe%fs%V-pipe%fs%Vold+pipe%resV
+             pipe%fs%W=2.0_WP*pipe%fs%W-pipe%fs%Wold+pipe%resW
+             
+             ! Apply IB forcing to enforce BC at the pipe walls
+             ibforcing: block
+                integer :: i,j,k
+                do k=pipe%fs%cfg%kmin_,pipe%fs%cfg%kmax_
+                   do j=pipe%fs%cfg%jmin_,pipe%fs%cfg%jmax_
+                      do i=pipe%fs%cfg%imin_,pipe%fs%cfg%imax_
+                         pipe%fs%U(i,j,k)=get_VF(i,j,k,'U')*pipe%fs%U(i,j,k)
+                         pipe%fs%V(i,j,k)=get_VF(i,j,k,'V')*pipe%fs%V(i,j,k)
+                         pipe%fs%W(i,j,k)=get_VF(i,j,k,'W')*pipe%fs%W(i,j,k)
+                      end do
+                   end do
+                end do
+                call pipe%fs%cfg%sync(pipe%fs%U)
+                call pipe%fs%cfg%sync(pipe%fs%V)
+                call pipe%fs%cfg%sync(pipe%fs%W)
+             end block ibforcing
+            
+             ! Apply other boundary conditions on the resulting fields
+             call pipe%fs%apply_bcond(time%t,time%dt)
+             
+             ! Solve Poisson equation
+             call pipe%fs%correct_mfr()
+             call pipe%fs%get_div()
+             pipe%fs%psolv%rhs=-pipe%fs%cfg%vol*pipe%fs%div*pipe%fs%rho/time%dt
+             pipe%fs%psolv%sol=0.0_WP
+             call pipe%fs%psolv%solve()
+             call pipe%fs%shift_p(pipe%fs%psolv%sol)
+             
+             ! Correct velocity
+             call pipe%fs%get_pgrad(pipe%fs%psolv%sol,pipe%resU,pipe%resV,pipe%resW)
+             pipe%fs%P=pipe%fs%P+pipe%fs%psolv%sol
+             pipe%fs%U=pipe%fs%U-time%dt*pipe%resU/pipe%fs%rho
+             pipe%fs%V=pipe%fs%V-time%dt*pipe%resV/pipe%fs%rho
+             pipe%fs%W=pipe%fs%W-time%dt*pipe%resW/pipe%fs%rho
          
-         ! Perform sub-iterations
-         do it = 1, time%itmax
-            
-            ! Build mid-time velocity
-            pipe%fs%U=0.5_WP*(pipe%fs%U+pipe%fs%Uold)
-            pipe%fs%V=0.5_WP*(pipe%fs%V+pipe%fs%Vold)
-            pipe%fs%W=0.5_WP*(pipe%fs%W+pipe%fs%Wold)
-            
-            ! Explicit calculation of drho*u/dt from NS
-            call pipe%fs%get_dmomdt(pipe%resU,pipe%resV,pipe%resW)
-            
-            ! Assemble explicit residual
-            pipe%resU=-2.0_WP*(pipe%fs%rho*pipe%fs%U-pipe%fs%rho*pipe%fs%Uold)+time%dt*pipe%resU
-            pipe%resV=-2.0_WP*(pipe%fs%rho*pipe%fs%V-pipe%fs%rho*pipe%fs%Vold)+time%dt*pipe%resV
-            pipe%resW=-2.0_WP*(pipe%fs%rho*pipe%fs%W-pipe%fs%rho*pipe%fs%Wold)+time%dt*pipe%resW
-            
-            ! Add body forcing
-            bodyforcing: block
-               real(WP) :: mfr
-               pipe%mfr=get_bodyforce_mfr(pipe%resU)
-               pipe%bforce=(pipe%mfr_target-pipe%mfr)/time%dtmid
-               pipe%resU=pipe%resU+time%dt*pipe%bforce
-            end block bodyforcing
+          end do
+         end if
 
-            ! Form implicit residuals
-            call pipe%fs%solve_implicit(time%dt,pipe%resU,pipe%resV,pipe%resW)
-            
-            ! Apply these residuals
-            pipe%fs%U=2.0_WP*pipe%fs%U-pipe%fs%Uold+pipe%resU
-            pipe%fs%V=2.0_WP*pipe%fs%V-pipe%fs%Vold+pipe%resV
-            pipe%fs%W=2.0_WP*pipe%fs%W-pipe%fs%Wold+pipe%resW
-            
-            ! Apply IB forcing to enforce BC at the pipe walls
-            ibforcing: block
-               integer :: i,j,k
-               do k=pipe%fs%cfg%kmin_,pipe%fs%cfg%kmax_
-                  do j=pipe%fs%cfg%jmin_,pipe%fs%cfg%jmax_
-                     do i=pipe%fs%cfg%imin_,pipe%fs%cfg%imax_
-                        pipe%fs%U(i,j,k)=get_VF(i,j,k,'U')*pipe%fs%U(i,j,k)
-                        pipe%fs%V(i,j,k)=get_VF(i,j,k,'V')*pipe%fs%V(i,j,k)
-                        pipe%fs%W(i,j,k)=get_VF(i,j,k,'W')*pipe%fs%W(i,j,k)
-                     end do
-                  end do
-               end do
-               call pipe%fs%cfg%sync(pipe%fs%U)
-               call pipe%fs%cfg%sync(pipe%fs%V)
-               call pipe%fs%cfg%sync(pipe%fs%W)
-            end block ibforcing
-           
-            ! Apply other boundary conditions on the resulting fields
-            call pipe%fs%apply_bcond(time%t,time%dt)
-            
-            ! Solve Poisson equation
-            call pipe%fs%correct_mfr()
-            call pipe%fs%get_div()
-            pipe%fs%psolv%rhs=-pipe%fs%cfg%vol*pipe%fs%div*pipe%fs%rho/time%dt
-            pipe%fs%psolv%sol=0.0_WP
-            call pipe%fs%psolv%solve()
-            call pipe%fs%shift_p(pipe%fs%psolv%sol)
-            
-            ! Correct velocity
-            call pipe%fs%get_pgrad(pipe%fs%psolv%sol,pipe%resU,pipe%resV,pipe%resW)
-            pipe%fs%P=pipe%fs%P+pipe%fs%psolv%sol
-            pipe%fs%U=pipe%fs%U-time%dt*pipe%resU/pipe%fs%rho
-            pipe%fs%V=pipe%fs%V-time%dt*pipe%resV/pipe%fs%rho
-            pipe%fs%W=pipe%fs%W-time%dt*pipe%resW/pipe%fs%rho
-        
-         end do
-
+         print *, "WHY"
+         call MPI_BARRIER(comm)
+         
          ! Inflow coupling
-         call dom_cpl%push(pipe%fs%U)
+         if (inpipeGrp) call dom_cpl%push(pipe%fs%U)
          call dom_cpl%transfer()
-         call dom_cpl%pull(pjet%resU)
-         call dom_cpl%push(pipe%fs%V)
+         if (inpjetGrp) call dom_cpl%pull(pjet%resU)
+         if (inpipeGrp) call dom_cpl%push(pipe%fs%V)
          call dom_cpl%transfer()
-         call dom_cpl%pull(pjet%resV)
-         call dom_cpl%push(pipe%fs%W)
+         if (inpjetGrp) call dom_cpl%pull(pjet%resV)
+         if (inpipeGrp) call dom_cpl%push(pipe%fs%W)
          call dom_cpl%transfer()
-         call dom_cpl%pull(pjet%resW)
-         apply_inflow_vals: block
-           if (pjet%cfg%imin .eq. pjet%cfg%imin_) then
-             pjet%fs%U(pjet%cfg%imino_:pjet%cfg%imin_,:,:) = pjet%resU(pjet%cfg%imino_:pjet%cfg%imin_,:,:)
-             pjet%fs%V(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:) = pjet%resV(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:)
-             pjet%fs%W(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:) = pjet%resW(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:)
-           end if
-         end block apply_inflow_vals
-         call pjet%fs%apply_bcond(time%t, time%dt)
+         if (inpjetGrp) call dom_cpl%pull(pjet%resW)
          
          !! PJET STEP
-         ! Remember old velocity
-         pjet%fs%Uold=pjet%fs%U
-         pjet%fs%Vold=pjet%fs%V
-         pjet%fs%Wold=pjet%fs%W
-         
-         ! Perform sub-iterations
-         do it = 1, time%itmax
-            
-            ! Build mid-time velocity
-            pjet%fs%U=0.5_WP*(pjet%fs%U+pjet%fs%Uold)
-            pjet%fs%V=0.5_WP*(pjet%fs%V+pjet%fs%Vold)
-            pjet%fs%W=0.5_WP*(pjet%fs%W+pjet%fs%Wold)
-            
-            ! Explicit calculation of drho*u/dt from NS
-            call pjet%fs%get_dmomdt(pjet%resU,pjet%resV,pjet%resW)
-            ! Assemble explicit residual
-            pjet%resU=-2.0_WP*(pjet%fs%rho*pjet%fs%U-pjet%fs%rho*pjet%fs%Uold)+time%dt*pjet%resU
-            pjet%resV=-2.0_WP*(pjet%fs%rho*pjet%fs%V-pjet%fs%rho*pjet%fs%Vold)+time%dt*pjet%resV
-            pjet%resW=-2.0_WP*(pjet%fs%rho*pjet%fs%W-pjet%fs%rho*pjet%fs%Wold)+time%dt*pjet%resW
-            ! Implicit velocity solve
-            call pjet%fs%solve_implicit(time%dt,pjet%resU,pjet%resV,pjet%resW)
-
-            ! Apply these residuals
-            pjet%fs%U=2.0_WP*pjet%fs%U-pjet%fs%Uold+pjet%resU
-            pjet%fs%V=2.0_WP*pjet%fs%V-pjet%fs%Vold+pjet%resV
-            pjet%fs%W=2.0_WP*pjet%fs%W-pjet%fs%Wold+pjet%resW
-
-            !> TODO: Time-varying boundary condition
-            dirichlet_velocity: block
-               use incomp_class, only: bcond
-               use mathtools,    only: Pi
-               type(bcond), pointer :: mybc
-               integer :: n,i,j,k,jn,jp
-               real(WP) :: r
-
-               jn = FLOOR(time%t/dt_dat) + 1
-               jp = jn + 1;
-               
-               ! Linear interpolation of provided flow rate data
-               if (jp.lt.1500) then
-                  Qt = (qdat(jp) - qdat(jn)) / (tdat(jp) - tdat(jn)) * (time%t - tdat(jn)) + qdat(jn) 
-                  U0 = Qt / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
-                  Uco = 0.05_WP * U0
-               else
-                  U0 = qdat(1500) / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
-                  Uco = 0.05_WP * U0
-               end if
-            end block dirichlet_velocity
+         if (inpjetGrp) then
+          ! Finish coupling
+          apply_inflow_vals: block
+            if (pjet%cfg%imin .eq. pjet%cfg%imin_) then
+              pjet%fs%U(pjet%cfg%imino_:pjet%cfg%imin_,:,:) = pjet%resU(pjet%cfg%imino_:pjet%cfg%imin_,:,:)
+              pjet%fs%V(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:) = pjet%resV(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:)
+              pjet%fs%W(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:) = pjet%resW(pjet%cfg%imino_:pjet%cfg%imin_-1,:,:)
+            end if
+          end block apply_inflow_vals
+          call pjet%fs%apply_bcond(time%t, time%dt)
+          ! Remember old velocity
+          pjet%fs%Uold=pjet%fs%U
+          pjet%fs%Vold=pjet%fs%V
+          pjet%fs%Wold=pjet%fs%W
+          
+          ! Perform sub-iterations
+          do it = 1, time%itmax
              
-            ! Apply other boundary conditions on the resulting fields
-            call pjet%fs%apply_bcond(time%t,time%dt)
+             ! Build mid-time velocity
+             pjet%fs%U=0.5_WP*(pjet%fs%U+pjet%fs%Uold)
+             pjet%fs%V=0.5_WP*(pjet%fs%V+pjet%fs%Vold)
+             pjet%fs%W=0.5_WP*(pjet%fs%W+pjet%fs%Wold)
+             
+             ! Explicit calculation of drho*u/dt from NS
+             call pjet%fs%get_dmomdt(pjet%resU,pjet%resV,pjet%resW)
+             ! Assemble explicit residual
+             pjet%resU=-2.0_WP*(pjet%fs%rho*pjet%fs%U-pjet%fs%rho*pjet%fs%Uold)+time%dt*pjet%resU
+             pjet%resV=-2.0_WP*(pjet%fs%rho*pjet%fs%V-pjet%fs%rho*pjet%fs%Vold)+time%dt*pjet%resV
+             pjet%resW=-2.0_WP*(pjet%fs%rho*pjet%fs%W-pjet%fs%rho*pjet%fs%Wold)+time%dt*pjet%resW
+             ! Implicit velocity solve
+             call pjet%fs%solve_implicit(time%dt,pjet%resU,pjet%resV,pjet%resW)
 
-            ! Solve Poisson equation
-            call pjet%fs%get_mfr()
-            call pjet%fs%correct_mfr()
-            call pjet%fs%get_div()
-            pjet%fs%psolv%rhs=-pjet%fs%cfg%vol*pjet%fs%div*pjet%fs%rho/time%dt
-            pjet%fs%psolv%sol=0.0_WP
-            call pjet%fs%psolv%solve()
-            call pjet%fs%shift_p(pjet%fs%psolv%sol)
-            
-            ! Correct velocity
-            call pjet%fs%get_pgrad(pjet%fs%psolv%sol,pjet%resU,pjet%resV,pjet%resW)
-            pjet%fs%P=pjet%fs%P+pjet%fs%psolv%sol
-            pjet%fs%U=pjet%fs%U-time%dt*pjet%resU/pjet%fs%rho
-            pjet%fs%V=pjet%fs%V-time%dt*pjet%resV/pjet%fs%rho
-            pjet%fs%W=pjet%fs%W-time%dt*pjet%resW/pjet%fs%rho
+             ! Apply these residuals
+             pjet%fs%U=2.0_WP*pjet%fs%U-pjet%fs%Uold+pjet%resU
+             pjet%fs%V=2.0_WP*pjet%fs%V-pjet%fs%Vold+pjet%resV
+             pjet%fs%W=2.0_WP*pjet%fs%W-pjet%fs%Wold+pjet%resW
 
-         end do
-         
-         ! Recompute interpolated velocity and divergence
-         call pjet%fs%interp_vel(pjet%Ui,pjet%Vi,pjet%Wi)
-         call pjet%fs%get_div()
-         
-         !TODO: ENSIGHT AND MONITOR OUTPUTS
+             dirichlet_velocity: block
+                use incomp_class, only: bcond
+                use mathtools,    only: Pi
+                type(bcond), pointer :: mybc
+                integer :: n,i,j,k,jn,jp
+                real(WP) :: r
 
-         call write_gendom_monitors(pipe)
-         call write_gendom_monitors(pjet)
+                jn = FLOOR(time%t/dt_dat) + 1
+                jp = jn + 1;
+                
+                ! Linear interpolation of provided flow rate data
+                if (jp.lt.1500) then
+                   Qt = (qdat(jp) - qdat(jn)) / (tdat(jp) - tdat(jn)) * (time%t - tdat(jn)) + qdat(jn) 
+                   U0 = Qt / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
+                   Uco = 0.05_WP * U0
+                else
+                   U0 = qdat(1500) / (Pi * Djet**2 / 4.0_WP) * 1.667E-05_WP 
+                   Uco = 0.05_WP * U0
+                end if
+             end block dirichlet_velocity
+              
+             ! Apply other boundary conditions on the resulting fields
+             call pjet%fs%apply_bcond(time%t,time%dt)
 
-         if (.true.) then
-            call write_ens(pjet)
+             ! Solve Poisson equation
+             call pjet%fs%get_mfr()
+             call pjet%fs%correct_mfr()
+             call pjet%fs%get_div()
+             pjet%fs%psolv%rhs=-pjet%fs%cfg%vol*pjet%fs%div*pjet%fs%rho/time%dt
+             pjet%fs%psolv%sol=0.0_WP
+             call pjet%fs%psolv%solve()
+             call pjet%fs%shift_p(pjet%fs%psolv%sol)
+             
+             ! Correct velocity
+             call pjet%fs%get_pgrad(pjet%fs%psolv%sol,pjet%resU,pjet%resV,pjet%resW)
+             pjet%fs%P=pjet%fs%P+pjet%fs%psolv%sol
+             pjet%fs%U=pjet%fs%U-time%dt*pjet%resU/pjet%fs%rho
+             pjet%fs%V=pjet%fs%V-time%dt*pjet%resV/pjet%fs%rho
+             pjet%fs%W=pjet%fs%W-time%dt*pjet%resW/pjet%fs%rho
+
+          end do
+          
+          ! Recompute interpolated velocity and divergence
+          call pjet%fs%interp_vel(pjet%Ui,pjet%Vi,pjet%Wi)
+          call pjet%fs%get_div()
+         end if
+
+         if (inpipeGrp) then
+            call write_gendom_monitors(pipe)
             call write_ens(pipe)
+         end if
+         if (inpjetGrp) then
+            call write_gendom_monitors(pjet)
+            call write_ens(pjet)
          end if
          
       end do
