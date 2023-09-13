@@ -1,25 +1,25 @@
 # Parallelization
-Partition :	4 1 1
+Partition :	8 6 1
 
 # Mesh definition
-Pipe diameter : 0.5
-Pipe length   : 2
-nx : 128
-ny : 64
-nz : 1
+Pipe diameter : 0.0254
+Pipe length   : 0.254
+nx : 326
+ny : 256
+nz : 256
 
 # Pipe properties
-Bulk velocity    :   0.2
-Fluctuation amp  :   0.1
+Bulk velocity    :   6.5
+Fluctuation amp  :   0.5
 
 # Time integration
-Max timestep size :	0.01
-Max cfl number :	   0.9
-Max time : 		      1000
+Max timestep size :	1e-5
+Max cfl number :	   0.4
+Max time : 		      5
 
 # Fluid properties
-Dynamic viscosity :  2e-4
-Density           :  1
+Dynamic viscosity :  1.825e-5
+Density           :  1.204
 
 # Pressure solver
 Pressure tolerance : 1e-4
@@ -30,8 +30,8 @@ Implicit tolerance : 1e-4
 Implicit iteration : 100
 
 # Ensight output
-Ensight output period : 1e-3
+Ensight output period : 0.1
 
 # Restart
-Restart from : 6.61000E+00
+# Restart from : 6.61000E+00
 Restart output period: 0.1

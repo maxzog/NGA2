@@ -1,6 +1,6 @@
 # Parallelization
-Jet Partition : 2 2 1
-Pipe Partition : 2 1 1 
+Jet Partition : 6 4 1
+Pipe Partition : 12 1 1 
 
 # Mesh definition
 Jet Lx :	0.2 # Meters
@@ -21,7 +21,7 @@ Stretch z : .false.
 
 Stretch factor : 1.5
 
-Overlap : 0.2
+Overlap : 0.05
 
 # Pipe
 Pipe length : 0.3

@@ -1,11 +1,11 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg,D,get_VF
+   use geometry,          only: cfg,D!,get_VF
    use hypre_str_class,   only: hypre_str
    use fft3d_class,       only: fft3d
    use incomp_class,      only: incomp
-   use sgsmodel_class,    only: sgsmodel
+!   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use event_class,       only: event
@@ -20,7 +20,7 @@ module simulation
    !type(hypre_str),   public :: ps
    type(fft3d),       public :: ps
    type(hypre_str),   public :: vs
-   type(sgsmodel),    public :: sgs
+!   type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
    
    !> Ensight postprocessing
@@ -39,6 +39,7 @@ module simulation
    
    !> Work arrays
    real(WP), dimension(:,:,:,:,:), allocatable :: gradU
+!   real(WP), dimension(:,:,:,:), allocatable :: SR
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:), allocatable :: G
@@ -46,7 +47,6 @@ module simulation
    
    
 contains
-   
    
    !> Compute massflow rate
    function get_bodyforce_mfr(srcU) result(mfr)
@@ -60,10 +60,9 @@ contains
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
-                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*get_VF(i,j,k,'U')
+                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
                   myUvol=myUvol+vol
-                  !myRhoU=myRhoU+vol*(2.0_WP*fs%U(i,j,k)-fs%Uold(i,j,k))*fs%rho+vol*srcU(i,j,k)
-                  myRhoU=myRhoU+vol*(fs%rho*fs%U(i,j,k)+srcU(i,j,k))
+                  myRhoU=myRhoU+vol*(fs%U(i,j,k)*fs%rho+srcU(i,j,k))
                end do
             end do
          end do
@@ -71,10 +70,9 @@ contains
          do k=fs%cfg%kmin_,fs%cfg%kmax_
             do j=fs%cfg%jmin_,fs%cfg%jmax_
                do i=fs%cfg%imin_,fs%cfg%imax_
-                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*get_VF(i,j,k,'U')
+                  vol=fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))
                   myUvol=myUvol+vol
-                  !myRhoU=myRhoU+vol*(2.0_WP*fs%U(i,j,k)-fs%Uold(i,j,k))*fs%rho
-                  myRhoU=myRhoU+vol*fs%rho*fs%U(i,j,k)
+                  myRhoU=myRhoU+vol*fs%U(i,j,k)*fs%rho
                end do
             end do
          end do
@@ -82,7 +80,6 @@ contains
       call MPI_ALLREDUCE(myUvol,Uvol,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(myRhoU,mfr ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); mfr=mfr/Uvol
    end function get_bodyforce_mfr
-   
    
    !> Initialization of problem solver
    subroutine simulation_init
@@ -127,6 +124,7 @@ contains
       ! Allocate work arrays
       allocate_work_arrays: block
          allocate(gradU(1:3,1:3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))   
+!         allocate(SR(1:6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))   
          allocate(resU(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resV(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(resW(cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
@@ -216,10 +214,10 @@ contains
       end block initialize_ibm
       
       
-      ! Create an LES model
-      create_sgs: block
-         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-      end block create_sgs
+!      ! Create an LES model
+!      create_sgs: block
+!         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+!      end block create_sgs
 
 
       ! Add Ensight output
@@ -233,7 +231,7 @@ contains
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('levelset',G)
          call ens_out%add_scalar('pressure',fs%P)
-         call ens_out%add_scalar('visc_sgs',sgs%visc)
+         ! call ens_out%add_scalar('visc_sgs',sgs%visc)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -293,14 +291,16 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
          
-         ! Turbulence modeling
-         sgs_modeling: block
-               use sgsmodel_class, only: vreman
-               resU=fs%rho
-               call fs%get_gradu(gradU)
-               call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
-               fs%visc=visc+sgs%visc
-         end block sgs_modeling
+!         ! Turbulence modeling
+!         sgs_modeling: block
+!               use sgsmodel_class, only: vreman
+!               resU=fs%rho
+!               call fs%get_gradu(gradU)
+!               call fs%interp_vel(Ui,Vi,Wi)
+!               call fs%get_strainrate(SR)
+!               call sgs%get_visc(type=vreman,dt=time%dtold,rho=resU,gradu=gradU)
+!               fs%visc=visc+sgs%visc
+!         end block sgs_modeling
          
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -350,20 +350,21 @@ contains
             
             ! Apply IB forcing to enforce BC at the pipe walls
             ibforcing: block
-               integer :: i,j,k
-               do k=fs%cfg%kmin_,fs%cfg%kmax_
-                  do j=fs%cfg%jmin_,fs%cfg%jmax_
-                     do i=fs%cfg%imin_,fs%cfg%imax_
-                        fs%U(i,j,k)=get_VF(i,j,k,'U')*fs%U(i,j,k)
-                        fs%V(i,j,k)=get_VF(i,j,k,'V')*fs%V(i,j,k)
-                        fs%W(i,j,k)=get_VF(i,j,k,'W')*fs%W(i,j,k)
-                     end do
-                  end do
-               end do
-               call fs%cfg%sync(fs%U)
-               call fs%cfg%sync(fs%V)
-               call fs%cfg%sync(fs%W)
+              integer :: i,j,k
+              do k=fs%cfg%kmin_,fs%cfg%kmax_
+                 do j=fs%cfg%jmin_,fs%cfg%jmax_
+                    do i=fs%cfg%imin_,fs%cfg%imax_
+                       fs%U(i,j,k)=sum(fs%itpr_x(:,i,j,k)*cfg%VF(i-1:i,j,k))*fs%U(i,j,k)
+                       fs%V(i,j,k)=sum(fs%itpr_y(:,i,j,k)*cfg%VF(i,j-1:j,k))*fs%V(i,j,k)
+                       fs%W(i,j,k)=sum(fs%itpr_z(:,i,j,k)*cfg%VF(i,j,k-1:k))*fs%W(i,j,k)
+                    end do
+                 end do
+              end do
+              call fs%cfg%sync(fs%U)
+              call fs%cfg%sync(fs%V)
+              call fs%cfg%sync(fs%W)
             end block ibforcing
+
            
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)

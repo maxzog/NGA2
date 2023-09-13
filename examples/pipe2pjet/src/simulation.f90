@@ -27,7 +27,7 @@ module simulation
    type(timetracker) :: time
    type(event)    :: ens_evt
    type(datafile) :: df
-   type(MPI_GROUP) :: pipegrp
+   type(MPI_GROUP) :: pipegrp, pjetgrp
 
    ! General domain type definition
    type :: gendomain
@@ -530,21 +530,21 @@ module simulation
          pipe%fs%U = 0.5_WP
          pipe%fs%V = 0.0_WP
          pipe%fs%W = 0.0_WP
-         ! ! Handle restart/saves here
-         ! pipeic: block
-         !    character(len=str_medium) :: timestamp
-         !    ! Create event for saving restart files
-         !    ! Check if we are restarting
-         !    call param_read(tag='Pipe IC File',val=timestamp,short='r',default='')
-         !    ! Read the datafile
-         !    df=datafile(pg=pipe%cfg,fdata='pipe_ic/data_'//trim(adjustl(timestamp)))
-         ! end block pipeic
-         !
-         ! call df%pullval(name='dt',val=time%dt)
-         ! call df%pullvar(name='U',var=pipe%fs%U)
-         ! call df%pullvar(name='V',var=pipe%fs%V)
-         ! call df%pullvar(name='W',var=pipe%fs%W)
-         ! call df%pullvar(name='P',var=pipe%fs%P)
+         ! Handle restart/saves here
+         pipeic: block
+            character(len=str_medium) :: timestamp
+            ! Create event for saving restart files
+            ! Check if we are restarting
+            call param_read(tag='Pipe IC File',val=timestamp,short='r',default='')
+            ! Read the datafile
+            df=datafile(pg=pipe%cfg,fdata='pipe_ic/data_'//trim(adjustl(timestamp)))
+         end block pipeic
+         
+         call df%pullval(name='dt',val=time%dt)
+         call df%pullvar(name='U',var=pipe%fs%U)
+         call df%pullvar(name='V',var=pipe%fs%V)
+         call df%pullvar(name='W',var=pipe%fs%W)
+         call df%pullvar(name='P',var=pipe%fs%P)
          
          call pipe%fs%cfg%sync(pipe%fs%U)
          call pipe%fs%cfg%sync(pipe%fs%V)
@@ -672,7 +672,8 @@ module simulation
       use param,     only: param_read
       use parallel,  only: group, comm, nproc, rank
       implicit none
-      integer :: n, npipe, npjet, ierr, rr
+      integer :: i, n, npipe, npjet, ierr, rr
+      integer, dimension(:), allocatable :: ranks
 
       call param_read('Pipe Partition',pipepart,short='p')
       call param_read('Jet Partition' ,pjetpart,short='p')
@@ -680,24 +681,30 @@ module simulation
       npipe = product(pipepart); npjet = product(pjetpart)
       n = nproc
 
-      ! Setup separate domain partitions
-      call MPI_GROUP_INCL(group, npipe, [0,npipe-1,1], pipegrp, ierr)
-      ! call MPI_GROUP_INCL(group, npjet, [npipe,n-1,1], pjetgrp, ierr)
-
-      ! call MPI_GROUP_RANK(pjetgrp, pjetRank, ierr)
-      call MPI_GROUP_RANK(pipegrp, pipeRank, ierr)
-
+      allocate(ranks(npipe))
+      ranks = 0
+      do i=1,npipe
+         ranks(i) = i-1
+      end do
+      
       call allocate_flowrate()
       call define_flowrate()
-
-      dom_cpl = coupler(src_grp=pipegrp, dst_grp=group,name='Domain Coupler')
       
       call pjet_geometry_init()
       call gendomain_allocate(pjet)
       call pjet_init()
       call setup_gendom_monitors(pjet)
       call setup_ens(pjet)
+
+      ! Setup separate domain partitions
+      call MPI_GROUP_INCL(group, npipe, ranks, pipegrp, ierr)
       call dom_cpl%set_dst(pjet%cfg)
+
+      ! call MPI_GROUP_RANK(pjetgrp, pjetRank, ierr)
+      call MPI_GROUP_RANK(pipegrp, pipeRank, ierr)
+      
+      dom_cpl = coupler(src_grp=pipegrp, dst_grp=group, name='Domain Coupler')
+      
       inpipeGrp = .false. 
       if (pipeRank /= MPI_UNDEFINED) then
          inpipeGrp = .true.
@@ -708,6 +715,7 @@ module simulation
          call setup_ens(pipe)
          call dom_cpl%set_src(pipe%cfg)
       end if
+      call dom_cpl%set_dst(pjet%cfg)
       call dom_cpl%initialize()
       
       ! Initialize time tracker with 2 subiterations
@@ -719,7 +727,7 @@ module simulation
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
-
+      deallocate(ranks)
    end subroutine simulation_init
    
    
@@ -727,16 +735,15 @@ module simulation
    subroutine simulation_run
       use parallel,       only: parallel_time
       implicit none
-      integer :: ii, it
-      real(WP) :: pipeCFL, pjetCFL
+      integer :: it
+      
       ! Perform time integration
       do while (.not.time%done())
-         
          ! Increment time
          ! call pipe%fs%get_cfl(time%dt,pipe%cfl)
          call pjet%fs%get_cfl(time%dt,pjet%cfl)
-         !time%cfl = max(pipe%cfl, pjet%cfl)
-         time%cfl = pjet%cfl 
+         ! time%cfl = max(pipe%cfl, pjet%cfl)
+         time%cfl = 0.4_WP !pjet%cfl 
          call time%adjust_dt()
          call time%increment()
 
