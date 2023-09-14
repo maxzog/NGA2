@@ -429,6 +429,7 @@ contains
 
                        ! Compute relative information
                        r12 = r2-r1
+                      
                        if (this%cfg%xper) r12(1) = r12(1) - this%cfg%xL*NINT(r12(1)/this%cfg%xL)
                        if (this%cfg%yper) r12(2) = r12(2) - this%cfg%yL*NINT(r12(2)/this%cfg%yL)
                        if (this%cfg%zper) r12(3) = r12(3) - this%cfg%zL*NINT(r12(3)/this%cfg%zL)
@@ -451,7 +452,7 @@ contains
 
                        corrsum = corrsum + corrtp**2   ! Kernel normalization
                        Vsum = Vsum + corrtp
-                       b_ij = b_ij + corrtp*dW!*rdt     ! Neighbor correlation 
+                       b_ij = b_ij + corrtp*dW! *rdt     ! Neighbor correlation 
                     end do
                  end do
               end do
@@ -459,10 +460,10 @@ contains
          end block correlate_neighbors
 
          call this%get_drift(eddyvisc=eddyvisc,rho=rho,SR=SR,p=this%p(i),drift=a_crw,Cs_arr=Cs_arr)
-         Vsum = Vsum !* 2.0_WP * sqrt(2.0_WP) * 3.1459_WP**(1.5_WP) / (1/Rc**2)**(1.5_WP)
-         !tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1) + a_ij(1)*dt/Vsum + b_ij(1)/sqrt(corrsum)
-         !tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2) + a_ij(2)*dt/Vsum + b_ij(2)/sqrt(corrsum)
-         !tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3) + a_ij(3)*dt/Vsum + b_ij(3)/sqrt(corrsum)
+         !Vsum = Vsum !* 2.0_WP * sqrt(2.0_WP) * 3.1459_WP**(1.5_WP) / (1/Rc**2)**(1.5_WP)
+         !tmp1 = (1.0_WP - a_crw*dt)*this%p(i)%us(1)  + b_ij(1)/sqrt(corrsum)!+ a_ij(1)*dt/Vsum
+         !tmp2 = (1.0_WP - a_crw*dt)*this%p(i)%us(2)  + b_ij(2)/sqrt(corrsum)!+ a_ij(2)*dt/Vsum
+         !tmp3 = (1.0_WP - a_crw*dt)*this%p(i)%us(3)  + b_ij(3)/sqrt(corrsum)!+ a_ij(3)*dt/Vsum
          !if (this%p(i)%id.eq.1) print *, a_ij(1)
          tmp1 = b_ij(1)/sqrt(corrsum)
          tmp2 = b_ij(2)/sqrt(corrsum)
