@@ -1,25 +1,27 @@
 !> Various definitions and tools for running an NGA2 simulation
 module simulation
    use precision,         only: WP
-   use geometry,          only: cfg,D!,get_VF
+   use geometry,          only: cfg,D
    use hypre_str_class,   only: hypre_str
    use fft3d_class,       only: fft3d
    use incomp_class,      only: incomp
 !   use sgsmodel_class,    only: sgsmodel
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   ! use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
    use datafile_class,    only: datafile
    use string,            only: str_medium
+   ! use lpt_class,         only: lpt
    implicit none
    private
    
    !> Get an an incompressible solver, pressure solver, and corresponding time tracker
    type(incomp),      public :: fs
-   !type(hypre_str),   public :: ps
    type(fft3d),       public :: ps
    type(hypre_str),   public :: vs
+   ! type(lpt),         public :: lp
 !   type(sgsmodel),    public :: sgs
    type(timetracker), public :: time
    
@@ -30,21 +32,24 @@ module simulation
    !> Provide a datafile and an event tracker for saving restarts
    type(event)    :: save_evt
    type(datafile) :: df
+   ! type(partmesh) :: pmesh
    logical :: restarted
    
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile
    
    public :: simulation_init,simulation_run,simulation_final
+
+   !> Timestep restrictions for LPT
+   ! real(WP) :: lp_dt, lp_dt_max
    
    !> Work arrays
+   !   real(WP), dimension(:,:,:,:), allocatable :: SR
    real(WP), dimension(:,:,:,:,:), allocatable :: gradU
-!   real(WP), dimension(:,:,:,:), allocatable :: SR
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:), allocatable :: G
    real(WP) :: visc,mfr_target,mfr,bforce
-   
    
 contains
    
@@ -212,6 +217,59 @@ contains
             end do
          end do
       end block initialize_ibm
+
+      ! ! Initialize LPT solver
+      ! initialize_lpt: block
+      !    use random, only: random_uniform, random_normal
+      !    real(WP) :: dp
+      !    integer :: i,np
+      !    character(len=str_medium) :: timestamp
+      !    ! Create solver
+      !    lp=lpt(cfg=cfg,name='LPT')
+      !    ! Get drag model from the inpit
+      !    call param_read('Drag model',lp%drag_model,default='Schiller-Naumann')
+      !    ! Get particle density from the input
+      !    call param_read('Particle density',lp%rho)
+      !    ! Get particle diameter from the input
+      !    call param_read('Particle Stokes number', stk)
+      !    ! Get number of particles
+      !    call param_read('Number of particles',np)
+      !    ! Check if a stochastic SGS model is used
+      !    if (restarted) then
+      !       call param_read('Restart from',timestamp,'r')
+      !       ! Read the part file
+      !       call lp%read(filename='restart/part_'//trim(adjustl(timestamp)))
+      !    else
+      !    ! Root process initializes np particles randomly
+      !       if (lp%cfg%amRoot) then
+      !          tau_eta = sqrt(visc/EPS0)
+      !          dp = sqrt(18.0_WP*visc*stk*tau_eta/lp%rho)
+      !          call lp%resize(np)
+      !          do i=1,np
+      !             ! Give id
+      !             lp%p(i)%id=int(i,8)
+      !             ! Set the diameter
+      !             lp%p(i)%d=dp
+      !             ! Assign random position in the domain
+      !             lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
+      !             &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
+      !             &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+      !             ! Give zero velocity
+      !             lp%p(i)%vel=0.0_WP
+      !             ! Give zero dt
+      !             lp%p(i)%dt=0.0_WP
+      !             ! temp
+      !             lp%p(i)%uf=0.0_WP
+      !             ! Locate the particle on the mesh
+      !             lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+      !             ! Activate the particle
+      !             lp%p(i)%flag=0
+      !          end do
+      !       end if
+      !       ! Distribute particles
+      !       call lp%sync()
+      !    end if
+      ! end block initialize_lpt
       
       
 !      ! Create an LES model
