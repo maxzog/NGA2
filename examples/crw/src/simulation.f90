@@ -308,6 +308,8 @@ contains
                   lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
                   ! Activate the particle
                   lp%p(i)%flag=0
+                  ! DRW - eddy lifetime
+                  lp%p(i)%teddy=-1.0_WP
                end do
             end if
             ! Distribute particles
@@ -700,6 +702,7 @@ contains
    !> Time integrate our problem
    subroutine simulation_run
       use parallel,       only: parallel_time
+      use crw_class,      only: EULER,PREDCORR
       implicit none
       integer :: ii
       real (WP) :: tmp
@@ -756,12 +759,12 @@ contains
             call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU, &
                     visc=resV,eddyvisc=sgs%visc,spatial=spatial,      &
                     dtdx=dtaurdx,dtdy=dtaurdy,dtdz=dtaurdz,           &
-                    gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+                    gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr,SDE_SCHEME=EULER)
          else
             call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W, &
                     rho=resU,visc=resV,eddyvisc=sgs%visc,           &
                     spatial=spatial,dtdx=dtaurdx,dtdy=dtaurdy,      &
-                    dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr)
+                    dtdz=dtaurdz,gradu=gradu,SR=SR2,Cs_arr=sgs%Cs_arr,SDE_SCHEME=EULER)
          end if
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
