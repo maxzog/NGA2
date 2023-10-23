@@ -1,36 +1,38 @@
 # Parallelization
-Jet Partition : 6 4 1
-Pipe Partition : 12 1 1 
+Jet Partition : 3 4 4
+Pipe Partition : 1 4 4 
 
 # Mesh definition
-Jet Lx :	0.2 # Meters
-Jet Ly :	0.1 #0.254 # Meters
-Jet Lz :	1e-4 # Meters
+Jet Lx :	0.1 #0.508 # Meters
+Jet Ly :	0.1 #0.254 #0.254 # Meters
+Jet Lz :	0.1 #0.254 # Meters
 
-Jet nx : 400
-Jet ny :	200
-Jet nz : 1
+Jet nx : 128 #512
+Jet ny :	150 #210
+Jet nz : 150 #210
 
-Pipe nx : 128
-Pipe ny : 64
-Pipe nz : 1
+Pipe nx : 326
+Pipe ny : 256
+Pipe nz : 256
 
 Stretch x : .false.
-Stretch y : .false.
-Stretch z : .false.
+Stretch y : .true.
+Stretch z : .true.
 
 Stretch factor : 1.5
 
-Overlap : 0.05
+Overlap : 0.005
 
 # Pipe
-Pipe length : 0.3
+Pipe length : 0.254
+Pipe IC File : pipe
 
 # Jet
 Flow rate        : 225.0  # SLM
 Pulse frequency  : 15.5   # 1/Seconds
 Pulse decay time : 0.7    # Seconds
 Jet diameter     : 0.0254 # Meters
+Bulk velocity    : 3.4
 # Coflow velocity  : 0.05   # Meters/Second
 
 # Fluid properties
@@ -44,9 +46,9 @@ Number of particles :   0 #10000 #10000 # 250000
 Use CRW :              .false.
 
 # Time integration
-Max timestep size : 1e-3
+Max timestep size : 1e-4
 Max cfl number :    0.8
-Max iter :          999999
+Max iter :          100
 Max time :          0.2
 
 # LES
@@ -57,10 +59,16 @@ SGS model type : 3
 Pressure iteration : 100
 Pressure tolerance : 1e-8
 
+Implicit tolerance : 1e-7
+Implicit iteration : 125
+
+
 # Ensight output
-Ensight output period : 0.0025
+Ensight output period : 1e-2 #0.0025
 
 # Restart config
 Restart sim : .false.
 # Restart from : 1.00044E-02
 Restart output period : 1.0
+
+Postproc output period : 1.0
