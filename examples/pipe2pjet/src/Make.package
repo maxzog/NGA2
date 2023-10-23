@@ -1,2 +1,2 @@
 # List here the extra files here
-f90EXE_sources += main.f90 simulation.f90 
+f90EXE_sources += main.f90 pipe_class.f90 pjet_class.f90 simulation.f90 
