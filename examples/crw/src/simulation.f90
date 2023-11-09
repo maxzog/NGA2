@@ -5,7 +5,7 @@ module simulation
    !use hypre_str_class,   only: hypre_str
    use fourier3d_class,   only: fourier3d
    use incomp_class,      only: incomp
-   use crw_class,         only: crw
+   use randomwalk_class,  only: rwalk
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use partmesh_class,    only: partmesh
@@ -22,7 +22,7 @@ module simulation
    type(fourier3d),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
-   type(crw),         public :: lp
+   type(rwalk),       public :: lp
    type(sgsmodel),    public :: sgs
    
    !> Ensight postprocessing
@@ -268,7 +268,7 @@ contains
          integer :: i,np
          character(len=str_medium) :: timestamp
          ! Create solver
-         lp=crw(cfg=cfg,name='CRW')
+         lp=rwalk(cfg=cfg,name='CRW')
          ! Get particle density from the input
          call param_read('Particle density',lp%rho)
          ! Get particle diameter from the input
