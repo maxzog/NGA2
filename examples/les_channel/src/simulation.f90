@@ -5,8 +5,11 @@ module simulation
    use fft2d_class,       only: fft2d
    use ddadi_class,       only: ddadi
    use incomp_class,      only: incomp
+   use sgsmodel_class,    only: sgsmodel
+   use randomwalk_class,  only: lpt
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
+   use partmesh_class,    only: partmesh
    use event_class,       only: event
    use monitor_class,     only: monitor
    implicit none
@@ -17,10 +20,13 @@ module simulation
    type(timetracker), public :: time
    type(fft2d),       public :: ps
    type(ddadi),       public :: vs
+   type(lpt),         public :: lp
+   type(sgsmodel),    public :: sgs
 
    !> Ensight postprocessing
-   type(ensight) :: ens_out
-   type(event)   :: ens_evt
+   type(partmesh) :: pmesh
+   type(ensight)  :: ens_out
+   type(event)    :: ens_evt
 
    !> Simulation monitor file
    type(monitor) :: mfile,cflfile,forcefile
@@ -201,6 +207,77 @@ contains
          call fs%get_div()
       end block create_and_initialize_flow_solver
 
+      ! Initialize the LES model
+      initialize_sgs: block
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+         sgs%Cs_ref=0.1_WP
+      end block initialize_sgs
+      
+      ! Initialize LPT solver
+      initialize_lpt: block
+         use string, only: str_medium
+         use random, only: random_uniform, random_normal
+         real(WP) :: dp
+         integer :: i,np
+         character(len=str_medium) :: timestamp
+         ! Create solver
+         lp=lpt(cfg=cfg,name='LPT')
+         ! Get drag model from the inpit
+         ! call param_read('Drag model',lp%drag_model,default='Schiller-Naumann')
+         ! Get particle density from the input
+         call param_read('Particle density',lp%rho)
+         ! Get particle diameter
+         call param_read('Particle diameter',dp)
+         ! Get number of particles
+         call param_read('Number of particles',np)
+         ! Randomly distribute particles w/o checking for overlap
+         if (lp%cfg%amRoot) then
+            call lp%resize(np)
+            do i=1,np
+               ! Give id
+               lp%p(i)%id=int(i,8)
+               ! Set the diameter
+               lp%p(i)%d=dp
+               ! Assign random position in the domain
+               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
+               &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
+               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+               ! Give zero velocity
+               lp%p(i)%vel=0.0_WP
+               ! Give zero dt
+               lp%p(i)%dt=0.0_WP
+               ! Init stochastic process at zero
+               lp%p(i)%us=0.0_WP
+               ! Init Wiener process to zero
+               lp%p(i)%dW=0.0_WP
+               ! Locate the particle on the mesh
+               lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
+               ! Activate the particle
+               lp%p(i)%flag=0
+            end do
+         end if
+         ! Distribute particles
+         call lp%sync()
+      end block initialize_lpt
+      
+      ! Create partmesh object for Lagrangian particle output
+      create_pmesh: block
+         integer :: np,i
+         call param_read('Number of particles',np)
+         pmesh=partmesh(nvar=1,nvec=3,name='lpt')
+         pmesh%varname(1)="id"
+         pmesh%vecname(1)="vel"
+         pmesh%vecname(2)="fld"
+         pmesh%vecname(3)="uf"
+         call lp%resize(np)
+         call lp%update_partmesh(pmesh)
+         do i = 1,lp%np_
+            pmesh%var(1,i) = lp%p(i)%id
+            pmesh%vec(:,1,i) = lp%p(i)%vel
+            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+            pmesh%vec(:,3,i) = lp%p(i)%us 
+         end do
+      end block create_pmesh
 
       ! Add Ensight output
       create_ensight: block
@@ -272,6 +349,7 @@ contains
 
    !> Time integrate our problem
    subroutine simulation_run
+      use sgsmodel_class, only: dynamic_smag
       implicit none
 
       ! Perform time integration
@@ -286,6 +364,19 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
+
+         ! Get eddy viscosity
+         call fs%interp_vel(Ui,Vi,Wi)
+         call fs%get_strainrate(SR=SR)
+         fs%visc=visc; resU=fs%rho; resV=fs%visc
+         call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
+         where (sgs%visc.lt.-fs%visc)
+            sgs%visc=-fs%visc
+         end where
+         fs%visc=fs%visc + sgs%visc
+
+         ! Advance particles
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
 
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
@@ -387,8 +478,20 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
 
-         ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
+         output_ens: block
+            integer :: ii
+            ! Output to ensight
+            if (ens_evt%occurs()) then
+               call lp%update_partmesh(pmesh)
+               do ii = 1,lp%np_
+                  pmesh%var(1,ii) = lp%p(ii)%id
+                  pmesh%vec(:,1,ii) = lp%p(ii)%vel
+                  pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+                  pmesh%vec(:,3,ii) = lp%p(ii)%us
+               end do
+               call ens_out%write_data(time%t)
+            end if
+         end block output_ens
 
          ! Perform and output monitoring
          call fs%get_max()
