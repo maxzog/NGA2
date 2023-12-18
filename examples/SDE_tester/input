@@ -6,7 +6,7 @@ Lx :	6.2832
 nx :	64
 
 # Fluid properties
-Dynamic viscosity :    0.008
+Dynamic viscosity :    0.01
 Density :              1
 Linear forcing :       .false.
 
@@ -17,9 +17,9 @@ Force to maximum Re_lambda : .false.
 
 # Particle properties
 Particle density :      1000
-Particle Stokes number : 0.0 #1.0
-Particle diameter :      0.0 #1.57224E-03 #8.70103E-03 
-Number of particles :   500000
+Particle Stokes number : 1.0
+Particle diameter :     5.336E-03 #1.57224E-03
+Number of particles :   250000
 Use SCRW :              .true.
 Correlation function :  3
 Interpolate fluid velocity : .false. 
@@ -31,7 +31,7 @@ SGS model type : 1
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
-Max iter :          150000 #999999
+Max iter :          5000 #999999
 Max time :          15
 
 # Ensight output

@@ -17,7 +17,7 @@ module crw_class
   real(WP), parameter, public :: tke_sgs  = 15.778_WP
   real(WP), parameter, public :: tau_crwi = 0.5702_WP
   real(WP), parameter, public :: C_poz = 1.0_WP
-  real(WP), parameter, public :: Rc = 0.05_WP
+  real(WP), parameter, public :: Rc = 0.04_WP
 
   integer, parameter, public :: EULER=1
   integer, parameter, public :: PREDCORR=2
@@ -665,8 +665,8 @@ contains
           pold=this%p(i)
           ! Advance with Euler prediction
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt,inst=inst)
-          this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
-          this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
+!          this%p(i)%pos=pold%pos+0.5_WP*mydt*this%p(i)%vel
+!          this%p(i)%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
 
           if (spatial_) then
              correlate_neighbors: block
@@ -702,9 +702,9 @@ contains
 
                            ! Compute relative information
                            r12 = r2-r1
-                           if (this%cfg%xper) r12(1) = r12(1) - this%cfg%xL*NINT(r12(1)/this%cfg%xL)
-                           if (this%cfg%yper) r12(2) = r12(2) - this%cfg%yL*NINT(r12(2)/this%cfg%yL)
-                           if (this%cfg%zper) r12(3) = r12(3) - this%cfg%zL*NINT(r12(3)/this%cfg%zL)
+             !              if (this%cfg%xper) r12(1) = r12(1) - this%cfg%xL*NINT(r12(1)/this%cfg%xL)
+             !              if (this%cfg%yper) r12(2) = r12(2) - this%cfg%yL*NINT(r12(2)/this%cfg%yL)
+             !              if (this%cfg%zper) r12(3) = r12(3) - this%cfg%zL*NINT(r12(3)/this%cfg%zL)
 
                            d12  = norm2(r12)
                            corrtp = corr_func(d12)
@@ -765,8 +765,8 @@ contains
 
           ! Correct with midpoint rule
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt,inst=inst)
-          this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
-          this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
+!          this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
+!          this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
 
           ! Stochastic update
           select case (SDE_SCHEME)

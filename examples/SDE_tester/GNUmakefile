@@ -11,6 +11,7 @@ PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
 EXEBASE   = nga
+FSANITIZER= FALSE
 
 # Directories that contain user-defined code
 Udirs   := src
@@ -31,7 +32,7 @@ VPATH_LOCATIONS   += $(Ulocs)
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := particles core subgrid constant_density data solver config grid libraries
+Bdirs   := particles core subgrid constant_density data transform solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 
