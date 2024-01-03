@@ -50,6 +50,54 @@ module simulation
 
 contains
 
+   !> Specialized subroutine that outputs particle concentration statistics
+   subroutine postproc_particles()
+      use string,    only: str_medium
+      use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM
+      use parallel,  only: MPI_REAL_WP
+      use mathtools, only: PI
+      implicit none
+      integer :: iunit,ierr,i,j,k
+      integer :: nb = 128
+      real(WP), dimension(:), allocatable :: c_, c, xk, N_avg
+      character(len=str_medium) :: filename,timestamp
+
+      ! Allocate concentration arrays and Chebyshev nodes
+      allocate(c (1:fs%cfg%ny)); c =0.0_WP
+      allocate(c_(1:fs%cfg%ny)); c_=0.0_WP
+      allocate(N_avg(1:fs%cfg%ny)); N_avg=0.0_WP
+
+      ! Get expected density
+      do i=1,fs%cfg%ny
+         N_avg(i) = lp%np * fs%cfg%dy(i) / fs%cfg%yL
+      end do
+
+      ! Accumulate particles
+      do i=1,lp%np_
+         k = lp%p(i)%ind(2)
+         c_(k) = c_(k) + 1
+      end do
+
+      ! All-reduce the data
+      call MPI_ALLREDUCE(c_, c,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      do j=fs%cfg%jmin,fs%cfg%jmax
+         c(j) = c(j) / N_avg(j)
+      end do
+
+      ! If root, print it out
+      if (fs%cfg%amRoot) then
+         filename='Concentration_'
+         write(timestamp,'(es12.5)') time%t
+         open(newunit=iunit,file=trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
+         write(iunit,'(a12,3x,a12)') 'Height','c'
+         do j=fs%cfg%jmin,fs%cfg%jmax
+            write(iunit,'(es12.5,3x,es12.5)') fs%cfg%ym(j),c(j)
+         end do
+         close(iunit)
+      end if
+      ! Deallocate work arrays
+      deallocate(N_avg,c,c_)
+   end subroutine postproc_particles
 
    !> Specialized subroutine that outputs the velocity distribution
    subroutine postproc_vel()
@@ -289,6 +337,7 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('viscosity',fs%visc)
+         call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -500,7 +549,10 @@ contains
          call forcefile%write()
 
          ! Specialized post-processing
-         if (ppevt%occurs()) call postproc_vel()
+         if (ppevt%occurs()) then
+            call postproc_vel()
+            call postproc_particles()
+         end if
 
       end do
 
