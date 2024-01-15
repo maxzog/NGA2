@@ -104,6 +104,8 @@ module randomwalk_class
      real(WP) :: Vsmin,Vsmax,Vsmean,Vsvar                !< V velocity seen info
      real(WP) :: Wsmin,Wsmax,Wsmean,Wsvar                !< W velocity seen info
      integer  :: np_new,np_out                           !< Number of new and removed particles
+     integer  :: ncol=0                                  !< Number of wall collisions 
+     real(WP), dimension(3) :: meanUn                    !< Mean deposition (wall normal) velocity
 
      ! SDE parameters and options
      integer :: corr_type=1
@@ -356,9 +358,10 @@ contains
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
   subroutine advance(this,dt,U,V,W,rho,visc)
-    use mpi_f08, only : MPI_SUM,MPI_INTEGER
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
     use mathtools, only: Pi
     use random, only: random_normal
+    use parallel, only: MPI_REAL_WP
     implicit none
     class(lpt), intent(inout) :: this
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
@@ -375,6 +378,8 @@ contains
 
     ! Zero out number of particles removed
     this%np_out=0
+    ! Zero out number of wall collisions
+    this%ncol=0
 
     ! Advance the equations
     do i=1,this%np_
@@ -410,13 +415,15 @@ contains
             use mathtools, only: Pi,normalize
             real(WP) :: d12
             real(WP), dimension(3) :: n12,Un
-            if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
-               d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
-               n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
                n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
-               this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
-               Un=sum(this%p(i)%vel*n12)*n12
-               this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
             end if
           end block wall_col
        end do
@@ -435,6 +442,15 @@ contains
        ! Copy back to particle
        if (myp%id.ne.-1) this%p(i)=myp
     end do
+     
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%meanUn,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+    if (this%ncol.ne.0) then
+       this%meanUn=this%meanUn/this%ncol
+    else
+       this%meanUn=0.0_WP
+    end if
 
     ! Communicate particles
     call this%sync()
@@ -457,6 +473,116 @@ contains
     end block logging
 
   end subroutine advance
+
+!  subroutine init_pdfs()
+!     use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM
+!     use parallel,only: MPI_REAL_WP
+!     character(5) :: stepstr
+!     character(len=8) :: fmt
+!     character(len=1024) :: filename
+!     real(WP), dimension(65) :: Uax,Vax
+!     real(WP), dimension(64) :: myUpdf,myVpdf,Updf,Vpdf
+!     real(WP) :: binw,Umean,Vmean,Uvar,Vvar,Vmin,Vmax,Umin,Umax
+!     integer, intent(in) :: step
+!     integer :: nbins,bin,i,j
+!
+!     fmt = '(I5.5)'
+!     write(stepstr,fmt) step
+!     filename='./pdfs/wall'//trim(stepstr)//'.dat'
+!     
+!     nbins = 64
+!
+!     Updf=0.0_WP; Vpdf=0.0_WP; Wpdf=0.0_WP
+!
+!     Umin=-3.0_WP; Umax=3.0_WP
+!     Vmin=-3.0_WP; Vmax=3.0_WP
+!     Wmin=-3.0_WP; Wmax=3.0_WP
+!
+!     binw=(Umax-Umin)/nbins
+!
+!     do i=1,nbins+1
+!        Uax(i) = Umin + binw*i
+!        Vax(i) = Vmin + binw*i
+!        Wax(i) = Wmin + binw*i
+!     end do
+!  end subroutine init_pdfs()
+!   
+!   !> Compute and output PDFs of fld vel and part vel
+!   subroutine compute_pdfs(step)
+!      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM
+!      use parallel,only: MPI_REAL_WP
+!      character(5) :: stepstr
+!      character(len=8) :: fmt
+!      character(len=1024) :: filename
+!      real(WP), dimension(65) :: Uax,Vax
+!      real(WP), dimension(64) :: myUpdf,myVpdf,Updf,Vpdf
+!      real(WP) :: binw,Umean,Vmean,Uvar,Vvar,Vmin,Vmax,Umin,Umax
+!      integer, intent(in) :: step
+!      integer :: nbins,bin,i,j
+!
+!      fmt = '(I5.5)'
+!      write(stepstr,fmt) step
+!      filename='./pdfs/wall'//trim(stepstr)//'.dat'
+!      
+!      nbins = 64
+!
+!      Updf=0.0_WP; Vpdf=0.0_WP; Wpdf=0.0_WP
+!
+!      Umin=-3.0_WP; Umax=3.0_WP
+!      Vmin=-3.0_WP; Vmax=3.0_WP
+!      Wmin=-3.0_WP; Wmax=3.0_WP
+!
+!      binw=(Umax-Umin)/nbins
+!
+!      do i=1,nbins+1
+!         Uax(i) = Umin + binw*i
+!         Vax(i) = Vmin + binw*i
+!         Wax(i) = Wmin + binw*i
+!      end do
+!
+!      do i=1,lp%np_
+!         bin = CEILING(lp%p(i)%vel(1)/binw, 1)
+!         if (bin.lt.0) then
+!            bin = (nbins-1.0_WP)/2.0_WP - ABS(bin)
+!         else
+!            bin = ABS(bin) + (nbins-1.0_WP)/2.0_WP
+!         end if
+!         Updf(bin) = Updf(bin) + 1.0_WP
+!         
+!         bin = CEILING(lp%p(i)%vel(2)/binw, 1)
+!         if (bin.lt.0) then
+!            bin = (nbins-1.0_WP)/2.0_WP - ABS(bin)
+!         else
+!            bin = ABS(bin) + (nbins-1.0_WP)/2.0_WP
+!         end if
+!         Vpdf(bin) = Vpdf(bin) + 1.0_WP
+!
+!         bin = CEILING(lp%p(i)%vel(3)/binw, 1)
+!         if (bin.lt.0) then
+!            bin = (nbins-1.0_WP)/2.0_WP - ABS(bin)
+!         else
+!            bin = ABS(bin) + (nbins-1.0_WP)/2.0_WP
+!         end if
+!         Wpdf(bin) = Wpdf(bin) + 1.0_WP
+!      end do
+!
+!      Updf = Updf / sum(Updf) / binw
+!      Vpdf = Vpdf / sum(Vpdf) / binw
+!      Wpdf = Wpdf / sum(Wpdf) / binw
+!
+!      open(1, file = filename, status='unknown')
+!      do i=1,nbins
+!         write(1,*) Updf(i), Vpdf(i), Wpdf(i)
+!      end do
+!      close(1)
+!
+!      open(2, file = './pdfs/axes.dat', status='unknown')
+!      do i=1,nbins+1
+!         write(2,*) Uax(i), Vax(i), Wax(i)
+!      end do
+!      close(2)
+!
+!   end subroutine compute_pdfs
 
   subroutine get_drift(this, p, rho, sgs_visc, a)
    use random, only: random_normal

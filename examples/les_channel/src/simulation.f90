@@ -7,6 +7,7 @@ module simulation
    use incomp_class,      only: incomp
    use sgsmodel_class,    only: sgsmodel
    use randomwalk_class,  only: lpt
+   use datafile_class,    only: datafile
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use partmesh_class,    only: partmesh
@@ -22,6 +23,7 @@ module simulation
    type(ddadi),       public :: vs
    type(lpt),         public :: lp
    type(sgsmodel),    public :: sgs
+   type(datafile),    public :: df
 
    !> Ensight postprocessing
    type(partmesh) :: pmesh
@@ -29,7 +31,7 @@ module simulation
    type(event)    :: ens_evt
 
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,forcefile
+   type(monitor) :: mfile,cflfile,forcefile,lptfile
 
    public :: simulation_init,simulation_run,simulation_final
 
@@ -37,6 +39,9 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:,:), allocatable :: SR
+   
+   !> Statistics
+   real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_,U2,U2_
 
    !> Fluid viscosity
    real(WP) :: visc
@@ -47,6 +52,10 @@ module simulation
 
    !> Event for post-processing
    type(event) :: ppevt
+
+   !> Misc
+   logical :: restarted
+   type(event) :: save_evt
 
 contains
 
@@ -81,12 +90,16 @@ contains
       ! All-reduce the data
       call MPI_ALLREDUCE(c_, c,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       do j=fs%cfg%jmin,fs%cfg%jmax
-         c(j) = c(j) / N_avg(j)
+         if (N_avg(j).gt.0.0_WP) then
+            c(j) = c(j) / N_avg(j)
+         else
+            c(j) = 1.0_WP
+         end if
       end do
 
       ! If root, print it out
       if (fs%cfg%amRoot) then
-         filename='Concentration_'
+         filename='./outs/Concentration_'
          write(timestamp,'(es12.5)') time%t
          open(newunit=iunit,file=trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
          write(iunit,'(a12,3x,a12)') 'Height','c'
@@ -106,45 +119,42 @@ contains
       use parallel,  only: MPI_REAL_WP
       implicit none
       integer :: iunit,ierr,i,j,k
-      real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_
       character(len=str_medium) :: filename,timestamp
-      ! Allocate vertical line storage
-      allocate(Uavg (fs%cfg%jmin:fs%cfg%jmax)); Uavg =0.0_WP
-      allocate(Uavg_(fs%cfg%jmin:fs%cfg%jmax)); Uavg_=0.0_WP
-      allocate(vol_ (fs%cfg%jmin:fs%cfg%jmax)); vol_ =0.0_WP
-      allocate(vol  (fs%cfg%jmin:fs%cfg%jmax)); vol  =0.0_WP
       ! Integrate all data over x and z
       do k=fs%cfg%kmin_,fs%cfg%kmax_
          do j=fs%cfg%jmin_,fs%cfg%jmax_
             do i=fs%cfg%imin_,fs%cfg%imax_
-               vol_(j) = vol_(j)+fs%cfg%vol(i,j,k)
-               Uavg_(j)=Uavg_(j)+fs%cfg%vol(i,j,k)*fs%U(i,j,k)
+               vol_(j) = vol_(j)+fs%cfg%vol(i,j,k)*time%dt
+               Uavg_(j)=Uavg_(j)+fs%cfg%vol(i,j,k)*fs%U(i,j,k)*time%dt
+               U2_(j)=U2_(j)+fs%cfg%vol(i,j,k)*fs%U(i,j,k)**2*time%dt
             end do
          end do
       end do
       ! All-reduce the data
       call MPI_ALLREDUCE( vol_, vol,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       call MPI_ALLREDUCE(Uavg_,Uavg,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(U2_,U2,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
       do j=fs%cfg%jmin,fs%cfg%jmax
          if (vol(j).gt.0.0_WP) then
+            U2(j)=U2(j)/vol(j)
             Uavg(j)=Uavg(j)/vol(j)
          else
             Uavg(j)=0.0_WP
+            U2(j)=0.0_WP
          end if
       end do
       ! If root, print it out
-      if (fs%cfg%amRoot) then
-         filename='Uavg_'
+      if (fs%cfg%amRoot.and.ppevt%occurs()) then
+         call execute_command_line('mkdir -p outs')
+         filename='./outs/Uavg_'
          write(timestamp,'(es12.5)') time%t
          open(newunit=iunit,file=trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
-         write(iunit,'(a12,3x,a12)') 'Height','Uavg'
+         write(iunit,'(a12,3x,a12,3x,a12)') 'Height','Uavg','U2'
          do j=fs%cfg%jmin,fs%cfg%jmax
-            write(iunit,'(es12.5,3x,es12.5)') fs%cfg%ym(j),Uavg(j)
+            write(iunit,'(es12.5,3x,es12.5,3x,es12.5)') fs%cfg%ym(j),Uavg(j),U2(j)-Uavg(j)**2
          end do
          close(iunit)
       end if
-      ! Deallocate work arrays
-      deallocate(Uavg,Uavg_,vol,vol_)
      end subroutine postproc_vel
 
 
@@ -186,6 +196,13 @@ contains
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         ! Allocate postproc arrays
+         allocate(Uavg (cfg%jmin:cfg%jmax)); Uavg =0.0_WP
+         allocate(Uavg_(cfg%jmin:cfg%jmax)); Uavg_=0.0_WP
+         allocate(U2   (cfg%jmin:cfg%jmax)); U2   =0.0_WP
+         allocate(U2_  (cfg%jmin:cfg%jmax)); U2_  =0.0_WP
+         allocate(vol_ (cfg%jmin:cfg%jmax)); vol_ =0.0_WP
+         allocate(vol  (cfg%jmin:cfg%jmax)); vol  =0.0_WP
       end block allocate_work_arrays
 
 
@@ -198,19 +215,56 @@ contains
          time%itmax=2
       end block initialize_timetracker
 
+      ! Handle restart/saves here
+      restart_and_save: block
+        use string, only: str_medium
+        character(len=str_medium) :: timestamp
+        ! Create event for saving restart files
+        save_evt=event(time,'Restart output')
+        call param_read('Restart output period',save_evt%tper)
+        ! Check if we are restarting
+        call param_read(tag='Restart from',val=timestamp,short='r',default='')
+        restarted=.false.; if (len_trim(timestamp).gt.0) restarted=.true.
+        if (restarted) then
+           ! If we are, read the name of the directory
+           call param_read('Restart from',timestamp,'r')
+           ! Read the datafile
+           df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
+        else
+           ! If we are not restarting, we will still need a datafile for saving restart files
+           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
+           df%valname(1)='t'
+           df%valname(2)='dt'
+           df%varname(1)='U'
+           df%varname(2)='V'
+           df%varname(3)='W'
+           df%varname(4)='P'
+        end if
+      end block restart_and_save
+
+      ! Revisit timetracker to adjust time and time step values if this is a restart
+      update_timetracker: block
+         if (restarted) then
+            call df%pullval(name='t' ,val=time%t )
+            call df%pullval(name='dt',val=time%dt)
+            time%told=time%t-time%dt
+         end if
+      end block update_timetracker
 
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
         use incomp_class,   only: dirichlet, bcond
          use mathtools, only: twoPi
+         use random, only: random_normal,random_uniform
          integer :: i,j,k,n
          real(WP) :: amp,vel
+         real(WP), dimension(2) :: flucs
          type(bcond), pointer :: mybc
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Define boundary conditions
-         call fs%add_bcond(name='bottom',type=dirichlet,locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='top',type=dirichlet,locator=top_of_domain,face='y',dir=+1,canCorrect=.true. )
+!         call fs%add_bcond(name='bottom',type=dirichlet,locator=bottom_of_domain,face='y',dir=-1,canCorrect=.true.)
+!         call fs%add_bcond(name='top',type=dirichlet,locator=top_of_domain,face='y',dir=+1,canCorrect=.false. )
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -231,36 +285,45 @@ contains
          ! To facilitate transition
          call param_read('Perturbation',amp)
          vel=sqrt(Ubulk**2+Wbulk**2)
-         do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-            do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-               do i=fs%cfg%imino_,fs%cfg%imaxo_
-                  if (fs%umask(i,j,k).eq.0) fs%U(i,j,k)=fs%U(i,j,k)+amp*vel*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)
-                  if (fs%wmask(i,j,k).eq.0) fs%W(i,j,k)=fs%W(i,j,k)+amp*vel*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+         if (restarted) then
+            call df%pullvar(name='U',var=fs%U)
+            call df%pullvar(name='V',var=fs%V)
+            call df%pullvar(name='W',var=fs%W)
+            call df%pullvar(name='P',var=fs%P)
+         else
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     !if (fs%umask(i,j,k).eq.0) fs%U(i,j,k)=fs%U(i,j,k)+amp*vel*cos(16.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)!*random_normal(m=0.0_WP,sd=0.5_WP)
+                     !if (fs%wmask(i,j,k).eq.0) fs%W(i,j,k)=fs%W(i,j,k)+amp*vel*cos(16.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)!*random_normal(m=0.0_WP,sd=0.5_WP)
+                     if (fs%umask(i,j,k).eq.0)fs%U(i,j,k)=fs%U(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
+                     if (fs%wmask(i,j,k).eq.0)fs%W(i,j,k)=fs%W(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                  end do
                end do
             end do
-         end do
-         ! Set no-slip walls
-         call fs%get_bcond('bottom',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-         end do
-         call fs%get_bcond('top',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-         end do
+         end if
+!         ! Set no-slip walls
+!         call fs%get_bcond('bottom',mybc)
+!         do n=1,mybc%itr%no_
+!            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+!            fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
+!         end do
+!         call fs%get_bcond('top',mybc)
+!         do n=1,mybc%itr%no_
+!            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+!            fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
+!         end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
       end block create_and_initialize_flow_solver
-
+      
       ! Initialize the LES model
       initialize_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
       end block initialize_sgs
-      
+
       ! Initialize LPT solver
       initialize_lpt: block
          use string, only: str_medium
@@ -304,6 +367,7 @@ contains
                lp%p(i)%flag=0
             end do
          end if
+         lp%meanUn=0.0_WP
          ! Distribute particles
          call lp%sync()
       end block initialize_lpt
@@ -380,8 +444,26 @@ contains
          call forcefile%add_column(meanU,'Bulk U')
          call forcefile%add_column(meanW,'Bulk W')
          call forcefile%write()
+         ! Create LPT monitor
+         call lp%get_max()
+         lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
+         call lptfile%add_column(time%n,'Timestep number')
+         call lptfile%add_column(time%t,'Time')
+         call lptfile%add_column(lp%np,'Particle number')
+         call lptfile%add_column(lp%ncol,'Collisions')
+         call lptfile%add_column(lp%meanUn(1),'Deposition X vel')
+         call lptfile%add_column(lp%meanUn(2),'Deposition Y vel')
+         call lptfile%add_column(lp%meanUn(3),'Deposition Z vel')
+         call lptfile%add_column(lp%Umin,'Particle Umin')
+         call lptfile%add_column(lp%Umax,'Particle Umax')
+         call lptfile%add_column(lp%Vmin,'Particle Vmin')
+         call lptfile%add_column(lp%Vmax,'Particle Vmax')
+         call lptfile%add_column(lp%Wmin,'Particle Wmin')
+         call lptfile%add_column(lp%Wmax,'Particle Wmax')
+         call lptfile%add_column(lp%dmin,'Particle dmin')
+         call lptfile%add_column(lp%dmax,'Particle dmax')
+         call lptfile%write()
       end block create_monitor
-
 
       ! Create a specialized post-processing file
       create_postproc: block
@@ -390,8 +472,8 @@ contains
          call param_read('Postproc output period',ppevt%tper)
          ! Perform the output
          if (ppevt%occurs()) call postproc_vel()
+         if (ppevt%occurs()) call postproc_particles()
       end block create_postproc
-
 
    end subroutine simulation_init
 
@@ -418,11 +500,12 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_strainrate(SR=SR)
          fs%visc=visc; resU=fs%rho; resV=fs%visc
-         call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
-         where (sgs%visc.lt.-fs%visc)
-            sgs%visc=-fs%visc
-         end where
-         fs%visc=fs%visc + sgs%visc
+
+         !call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
+         !where (sgs%visc.lt.-fs%visc)
+         !   sgs%visc=-fs%visc
+         !end where
+         !fs%visc=fs%visc + sgs%visc
 
          ! Advance particles
          call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
@@ -486,22 +569,22 @@ contains
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
 
-            ! Reset Dirichlet BCs
-            dirichlet_velocity: block
-              use incomp_class, only: bcond
-              type(bcond), pointer :: mybc
-              integer :: n,i,j,k
-              call fs%get_bcond('bottom',mybc)
-              do n=1,mybc%itr%no_
-                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                 fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-              end do
-              call fs%get_bcond('top',mybc)
-              do n=1,mybc%itr%no_
-                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                 fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-              end do
-            end block dirichlet_velocity
+!            ! Reset Dirichlet BCs
+!            dirichlet_velocity: block
+!              use incomp_class, only: bcond
+!              type(bcond), pointer :: mybc
+!              integer :: n,i,j,k
+!              call fs%get_bcond('bottom',mybc)
+!              do n=1,mybc%itr%no_
+!                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+!                 fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
+!              end do
+!              call fs%get_bcond('top',mybc)
+!              do n=1,mybc%itr%no_
+!                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+!                 fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
+!              end do
+!            end block dirichlet_velocity
 
             ! Solve Poisson equation
             call fs%correct_mfr()
@@ -544,14 +627,40 @@ contains
 
          ! Perform and output monitoring
          call fs%get_max()
+         call lp%get_max()
          call mfile%write()
          call cflfile%write()
          call forcefile%write()
+         call lptfile%write()
+        
+         ! Fluid phase post-processing 
+         call postproc_vel()
 
-         ! Specialized post-processing
+         ! Disperse phase post-processing
          if (ppevt%occurs()) then
-            call postproc_vel()
             call postproc_particles()
+         end if
+
+         ! Finally, see if it's time to save restart files
+         if (save_evt%occurs()) then
+            save_restart: block
+              use string, only: str_medium
+              character(len=str_medium) :: timestamp
+              ! Prefix for files
+              write(timestamp,'(es12.5)') time%t
+              ! Prepare a new directory
+              if (fs%cfg%amRoot) call execute_command_line('mkdir -p restart')
+              ! Populate df and write it
+              call df%pushval(name='t' ,val=time%t     )
+              call df%pushval(name='dt',val=time%dt    )
+              call df%pushvar(name='U' ,var=fs%U       )
+              call df%pushvar(name='V' ,var=fs%V       )
+              call df%pushvar(name='W' ,var=fs%W       )
+              call df%pushvar(name='P' ,var=fs%P       )
+              call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
+              ! Write particle file
+              call lp%write(filename='restart/part_'//trim(adjustl(timestamp)))
+            end block save_restart
          end if
 
       end do
@@ -571,6 +680,8 @@ contains
 
       ! Deallocate work arrays
       deallocate(resU,resV,resW,Ui,Vi,Wi,SR)
+      ! Deallocate work arrays
+      deallocate(Uavg,Uavg_,U2,U2_,vol,vol_)
 
    end subroutine simulation_final
 

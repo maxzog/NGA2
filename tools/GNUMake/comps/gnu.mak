@@ -37,11 +37,11 @@ endif
 
 ifeq ($(DEBUG),TRUE)
 
-  CXXFLAGS += -Og -fno-inline -ggdb -Wshadow -Wall -Wno-sign-compare -ftrapv -Wno-unused-but-set-variable
-  CFLAGS   += -Og -fno-inline -ggdb -Wshadow -Wall -Wno-sign-compare -ftrapv
+  CXXFLAGS += -Og -fno-inline -ggdb -Wall -Wshadow -Wno-sign-compare -ftrapv -Wno-unused-but-set-variable -fallow-argument-mismatch
+  CFLAGS   += -Og -fno-inline -ggdb -Wall -Wshadow -Wno-sign-compare -ftrapv -fallow-argument-mismatch
 
-  FFLAGS   += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
-  F90FLAGS += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
+  FFLAGS   += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv -fallow-argument-mismatch
+  F90FLAGS += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv -fallow-argument-mismatch
 
   ifneq ($(gcc_major_version),$(filter $(gcc_major_version),4 5))
     CXXFLAGS += -Wnull-dereference
@@ -50,10 +50,10 @@ ifeq ($(DEBUG),TRUE)
 
 else
 
-  CXXFLAGS += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
-  CFLAGS   += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
-  FFLAGS   += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
-  F90FLAGS += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math
+  CXXFLAGS += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math -fallow-argument-mismatch
+  CFLAGS   += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math -fallow-argument-mismatch
+  FFLAGS   += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math -fallow-argument-mismatch
+  F90FLAGS += -O3 -fno-tree-vectorize -funroll-loops -pipe -fopenmp -fomit-frame-pointer -ffast-math -fallow-argument-mismatch
 
 endif
 

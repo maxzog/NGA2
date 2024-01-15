@@ -1,31 +1,35 @@
 # Parallelization
-Partition :	4 1 1
+Partition :	1 6 6
 
 # Mesh definition
-Lx :	5
-Ly :	1
-Lz :  0.1
+Lx :	1.25664
+Ly :	0.2
+Lz :  0.62832
 nx :	128
-ny :	64
-nz :  1
+ny :	128
+nz :  128
 Stretching : 2.1
 
 # Fluid properties and velocity
-Dynamic viscosity :   0.0001
-Density :             1
-Ubulk : 1.5
+Dynamic viscosity : 2.041e-5
+Density :           1.3
+Ubulk : 0.36
 Wbulk : 0
-Perturbation : 0.5
+Perturbation : 0.25
 
 # Particles
-Number of particles : 100000 
-Particle density : 1000
-Particle diameter : 1.5e-3
+Number of particles : 100000
+Particle density : 1300
+Particle diameter : 8.3746e-5
 
 # Time integration
 Max timestep size : 2e-2
 Max cfl number :    0.9
 
 # Ensight output
-Ensight output period :  1e-2
-Postproc output period : 10
+Ensight output period :  0.25
+Postproc output period : 1
+
+# Restart output
+Restart output period : 1.0
+Restart from : 4.40035E+01
