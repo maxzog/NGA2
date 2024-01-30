@@ -1305,7 +1305,8 @@ contains
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
   subroutine advance_crw(this,dt,U,V,W,rho,visc,sgs_visc)
-    use mpi_f08, only : MPI_SUM,MPI_INTEGER
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+    use parallel, only: MPI_REAL_WP
     use mathtools, only: Pi
     use random, only: random_normal
     implicit none
@@ -1325,6 +1326,8 @@ contains
 
     ! Zero out number of particles removed
     this%np_out=0
+    ! Zero out wall collision counter
+    this%ncol=0
 
     ! Advance the equations
     do i=1,this%np_
@@ -1374,13 +1377,15 @@ contains
             use mathtools, only: Pi,normalize
             real(WP) :: d12
             real(WP), dimension(3) :: n12,Un
-            if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
-               d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
-               n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
                n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
-               this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
-               Un=sum(this%p(i)%vel*n12)*n12
-               this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
             end if
           end block wall_col
        end do
@@ -1399,6 +1404,15 @@ contains
        ! Copy back to particle
        if (myp%id.ne.-1) this%p(i)=myp
     end do
+    
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%meanUn,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+    if (this%ncol.ne.0) then
+       this%meanUn=this%meanUn/this%ncol
+    else
+       this%meanUn=0.0_WP
+    end if
 
     ! Communicate particles
     call this%sync()

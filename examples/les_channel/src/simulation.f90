@@ -42,7 +42,11 @@ module simulation
    
    !> Statistics
    real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_,U2,U2_
-
+   real(WP), dimension(:), allocatable :: c,c_,N_avg,N_inst,c_inst,c_inst_
+   real(WP), dimension(:), allocatable :: pUavg,pVavg,pWavg,pU2,pV2,pW2
+   real(WP), dimension(:), allocatable :: pUavg_,pVavg_,pWavg_,pU2_,pV2_,pW2_
+   real(WP), dimension(:), allocatable :: counter, counter_
+   
    !> Fluid viscosity
    real(WP) :: visc
 
@@ -67,49 +71,89 @@ contains
       use mathtools, only: PI
       implicit none
       integer :: iunit,ierr,i,j,k
-      integer :: nb = 128
-      real(WP), dimension(:), allocatable :: c_, c, xk, N_avg
       character(len=str_medium) :: filename,timestamp
 
-      ! Allocate concentration arrays and Chebyshev nodes
-      allocate(c (1:fs%cfg%ny)); c =0.0_WP
-      allocate(c_(1:fs%cfg%ny)); c_=0.0_WP
-      allocate(N_avg(1:fs%cfg%ny)); N_avg=0.0_WP
+      c_inst=0.0_WP; c_inst_=0.0_WP
+!      pUavg_=0.0_WP
+!      pVavg_=0.0_WP
+!      pWavg_=0.0_WP
+!      pU2_=0.0_WP
+!      pV2_=0.0_WP
+!      pW2_=0.0_WP
+!      counter_=0.0_WP
 
       ! Get expected density
       do i=1,fs%cfg%ny
-         N_avg(i) = lp%np * fs%cfg%dy(i) / fs%cfg%yL
+         N_avg(i) = N_avg(i) + lp%np * fs%cfg%dy(i) / fs%cfg%yL * time%dt
+         N_inst(i) = lp%np * fs%cfg%dy(i) / fs%cfg%yL * time%dt
       end do
 
       ! Accumulate particles
       do i=1,lp%np_
-         k = lp%p(i)%ind(2)
-         c_(k) = c_(k) + 1
+         k=lp%p(i)%ind(2)
+         c_inst_(k)  = c_inst_(k) + time%dt
+         c_(k)       = c_(k) + time%dt
+         counter_(k) = counter_(k) + time%dt
+         pUavg_(k)   = pUavg_(k) + time%dt * lp%p(i)%vel(1)
+         pVavg_(k)   = pVavg_(k) + time%dt * lp%p(i)%vel(2)
+         pWavg_(k)   = pWavg_(k) + time%dt * lp%p(i)%vel(3)
+         pU2_(k)     = pU2_(k)   + time%dt * lp%p(i)%vel(1)**2
+         pV2_(k)     = pV2_(k)   + time%dt * lp%p(i)%vel(2)**2
+         pW2_(k)     = pW2_(k)   + time%dt * lp%p(i)%vel(3)**2
       end do
 
       ! All-reduce the data
-      call MPI_ALLREDUCE(c_, c,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(c_inst_,c_inst,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(c_,c,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(pUavg_,pUavg,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(pVavg_,pVavg,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(pWavg_,pWavg,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(pU2_,pU2,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(pV2_,pV2,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(pW2_,pW2,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+      call MPI_ALLREDUCE(counter_,counter,fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+
       do j=fs%cfg%jmin,fs%cfg%jmax
+         if (counter(j).gt.0.0_WP) then
+            pUavg(j)=pUavg(j)/counter(j)
+            pVavg(j)=pVavg(j)/counter(j)
+            pWavg(j)=pWavg(j)/counter(j)
+            pU2(j)  =pU2(j)  /counter(j)
+            pV2(j)  =pV2(j)  /counter(j)
+            pW2(j)  =pW2(j)  /counter(j)
+         else
+            pUavg(j)=0.0_WP
+            pVavg(j)=0.0_WP
+            pWavg(j)=0.0_WP
+            pU2(j)  =0.0_WP
+            pV2(j)  =0.0_WP
+            pW2(j)  =0.0_WP
+         end if
          if (N_avg(j).gt.0.0_WP) then
             c(j) = c(j) / N_avg(j)
          else
             c(j) = 1.0_WP
          end if
+         if (N_inst(j).gt.0.0_WP) then
+            c_inst(j) = c_inst(j) / N_inst(j)
+         else
+            c_inst(j) = 1.0_WP
+         end if
+         
       end do
-
+      
       ! If root, print it out
-      if (fs%cfg%amRoot) then
+      if (fs%cfg%amRoot.and.ppevt%occurs()) then
          filename='./outs/Concentration_'
          write(timestamp,'(es12.5)') time%t
          open(newunit=iunit,file=trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
-         write(iunit,'(a12,3x,a12)') 'Height','c'
+         write(iunit,'(a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12,3x,a12)') 'Height','c','c_inst','U','V','W','UU','VV','WW'
          do j=fs%cfg%jmin,fs%cfg%jmax
-            write(iunit,'(es12.5,3x,es12.5)') fs%cfg%ym(j),c(j)
+            write(iunit,'(es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5,3x,es12.5)') & 
+               & fs%cfg%ym(j),c(j),c_inst(j),pUavg(j),pVavg(j),pWavg(j),pU2(j)-pUavg(j)**2,pV2(j)-pVavg(j)**2,pW2(j)-pWavg(j)**2
          end do
          close(iunit)
       end if
-      ! Deallocate work arrays
-      deallocate(N_avg,c,c_)
    end subroutine postproc_particles
 
    !> Specialized subroutine that outputs the velocity distribution
@@ -203,6 +247,28 @@ contains
          allocate(U2_  (cfg%jmin:cfg%jmax)); U2_  =0.0_WP
          allocate(vol_ (cfg%jmin:cfg%jmax)); vol_ =0.0_WP
          allocate(vol  (cfg%jmin:cfg%jmax)); vol  =0.0_WP
+         ! Allocate concentration arrays
+         allocate(c      (1:cfg%ny)); c      =0.0_WP
+         allocate(c_     (1:cfg%ny)); c_     =0.0_WP
+         allocate(N_avg  (1:cfg%ny)); N_avg  =0.0_WP
+         allocate(N_inst (1:cfg%ny)); N_inst =0.0_WP
+         allocate(c_inst (1:cfg%ny)); c_inst =0.0_WP
+         allocate(c_inst_(1:cfg%ny)); c_inst_=0.0_WP
+         ! Allocate particle velocity stats
+         allocate(pUavg (1:cfg%ny)); pUavg =0.0_WP
+         allocate(pVavg (1:cfg%ny)); pVavg =0.0_WP
+         allocate(pWavg (1:cfg%ny)); pWavg =0.0_WP
+         allocate(pUavg_(1:cfg%ny)); pUavg_=0.0_WP
+         allocate(pVavg_(1:cfg%ny)); pVavg_=0.0_WP
+         allocate(pWavg_(1:cfg%ny)); pWavg_=0.0_WP
+         allocate(pU2   (1:cfg%ny)); pU2   =0.0_WP
+         allocate(pV2   (1:cfg%ny)); pV2   =0.0_WP
+         allocate(pW2   (1:cfg%ny)); pW2   =0.0_WP
+         allocate(pU2_  (1:cfg%ny)); pU2_  =0.0_WP
+         allocate(pV2_  (1:cfg%ny)); pV2_  =0.0_WP
+         allocate(pW2_  (1:cfg%ny)); pW2_  =0.0_WP
+         allocate(counter (1:cfg%ny)); counter =0.0_WP
+         allocate(counter_(1:cfg%ny)); counter_=0.0_WP
       end block allocate_work_arrays
 
 
@@ -211,6 +277,7 @@ contains
          time=timetracker(amRoot=cfg%amRoot)
          call param_read('Max timestep size',time%dtmax)
          call param_read('Max cfl number',time%cflmax)
+         call param_read('Max time',time%tmax)
          time%dt=time%dtmax
          time%itmax=2
       end block initialize_timetracker
@@ -263,8 +330,8 @@ contains
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Define boundary conditions
-!         call fs%add_bcond(name='bottom',type=dirichlet,locator=bottom_of_domain,face='y',dir=-1,canCorrect=.true.)
-!         call fs%add_bcond(name='top',type=dirichlet,locator=top_of_domain,face='y',dir=+1,canCorrect=.false. )
+         call fs%add_bcond(name='bottom',type=dirichlet,locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
+         call fs%add_bcond(name='top',type=dirichlet,locator=top_of_domain,face='y',dir=+1,canCorrect=.false. )
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -302,17 +369,17 @@ contains
                end do
             end do
          end if
-!         ! Set no-slip walls
-!         call fs%get_bcond('bottom',mybc)
-!         do n=1,mybc%itr%no_
-!            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-!            fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-!         end do
-!         call fs%get_bcond('top',mybc)
-!         do n=1,mybc%itr%no_
-!            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-!            fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-!         end do
+         ! Set no-slip walls
+         call fs%get_bcond('bottom',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%V(i,j,k)=0.0_WP
+         end do
+         call fs%get_bcond('top',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            fs%V(i,j,k)=0.0_WP
+         end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -501,14 +568,14 @@ contains
          call fs%get_strainrate(SR=SR)
          fs%visc=visc; resU=fs%rho; resV=fs%visc
 
-         !call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
-         !where (sgs%visc.lt.-fs%visc)
-         !   sgs%visc=-fs%visc
-         !end where
-         !fs%visc=fs%visc + sgs%visc
+!         call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
+!         where (sgs%visc.lt.-fs%visc)
+!            sgs%visc=-fs%visc
+!         end where
+!         fs%visc=fs%visc + sgs%visc
 
          ! Advance particles
-         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
+         call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
 
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
@@ -552,10 +619,10 @@ contains
                end do
                call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
                call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanU=meanU/Uvol
-               where (fs%umask.eq.0) resU=resU+Ubulk-meanU
+               where (fs%umask.eq.0) resU=resU+fs%rho*(Ubulk-meanU)
                call MPI_ALLREDUCE(myWvol,Wvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
                call MPI_ALLREDUCE(myW   ,meanW,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanW=meanW/Wvol
-               where (fs%wmask.eq.0) resW=resW+Wbulk-meanW
+               where (fs%wmask.eq.0) resW=resW+fs%rho*(Wbulk-meanW)
             end block forcing
 
             ! Form implicit residuals
@@ -569,22 +636,22 @@ contains
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
 
-!            ! Reset Dirichlet BCs
-!            dirichlet_velocity: block
-!              use incomp_class, only: bcond
-!              type(bcond), pointer :: mybc
-!              integer :: n,i,j,k
-!              call fs%get_bcond('bottom',mybc)
-!              do n=1,mybc%itr%no_
-!                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-!                 fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-!              end do
-!              call fs%get_bcond('top',mybc)
-!              do n=1,mybc%itr%no_
-!                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-!                 fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
-!              end do
-!            end block dirichlet_velocity
+            ! Reset Dirichlet BCs
+            dirichlet_velocity: block
+              use incomp_class, only: bcond
+              type(bcond), pointer :: mybc
+              integer :: n,i,j,k
+              call fs%get_bcond('bottom',mybc)
+              do n=1,mybc%itr%no_
+                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                 fs%V(i,j,k)=0.0_WP
+              end do
+              call fs%get_bcond('top',mybc)
+              do n=1,mybc%itr%no_
+                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+                 fs%V(i,j,k)=0.0_WP
+              end do
+            end block dirichlet_velocity
 
             ! Solve Poisson equation
             call fs%correct_mfr()
@@ -635,11 +702,7 @@ contains
         
          ! Fluid phase post-processing 
          call postproc_vel()
-
-         ! Disperse phase post-processing
-         if (ppevt%occurs()) then
-            call postproc_particles()
-         end if
+         call postproc_particles()
 
          ! Finally, see if it's time to save restart files
          if (save_evt%occurs()) then

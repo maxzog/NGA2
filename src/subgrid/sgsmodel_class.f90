@@ -335,7 +335,7 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Skip wall cells
-               if (this%cfg%VF(i,j,k).eq.0.0_WP) then
+               if (this%cfg%VF(i,j,k).lt.epsilon(1.0_WP)) then
                   this%LM(i,j,k)=0.0_WP
                   this%MM(i,j,k)=0.0_WP
                   cycle
@@ -411,7 +411,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (this%MM(i,j,k).ne.0.0_WP) then
+               if (abs(this%MM(i,j,k)).gt.100.0_WP*epsilon(1.0_WP)/this%Cs_ref**2) then
                   Cs=max(this%LM(i,j,k)/this%MM(i,j,k),0.0_WP)
                else
                   Cs=0.0_WP
@@ -430,7 +430,7 @@ contains
    end subroutine visc_dynamic
    
    
-   !> Get subgrid scale dynamic viscosity - Constant
+   !> Get subgrid scale viscosity - Constant coefficient
    subroutine visc_cst(this,rho,SR)
       implicit none
       class(sgsmodel), intent(inout) :: this
