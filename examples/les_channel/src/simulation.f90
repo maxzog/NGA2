@@ -299,13 +299,16 @@ contains
            df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
         else
            ! If we are not restarting, we will still need a datafile for saving restart files
-           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
+           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=7)
            df%valname(1)='t'
            df%valname(2)='dt'
            df%varname(1)='U'
            df%varname(2)='V'
            df%varname(3)='W'
            df%varname(4)='P'
+           df%varname(5)='LM'
+           df%varname(6)='MM'
+           df%varname(7)='visc'
         end if
       end block restart_and_save
 
@@ -390,6 +393,15 @@ contains
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
       end block initialize_sgs
+      
+      ! Revisit subgrid model to update arrays (dynamic) if this is a restart
+      update_sgs: block
+         if (restarted) then
+            call df%pullvar(name='LM'   ,var=sgs%LM)
+            call df%pullvar(name='MM'   ,var=sgs%MM)
+            call df%pullvar(name='visc' ,var=sgs%visc)
+         end if
+      end block update_sgs
 
       ! Initialize LPT solver
       initialize_lpt: block
@@ -568,11 +580,11 @@ contains
          call fs%get_strainrate(SR=SR)
          fs%visc=visc; resU=fs%rho; resV=fs%visc
 
-!         call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
-!         where (sgs%visc.lt.-fs%visc)
-!            sgs%visc=-fs%visc
-!         end where
-!         fs%visc=fs%visc + sgs%visc
+         call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
+         where (sgs%visc.lt.-fs%visc)
+            sgs%visc=-fs%visc
+         end where
+         fs%visc=fs%visc + sgs%visc
 
          ! Advance particles
          call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
@@ -720,6 +732,9 @@ contains
               call df%pushvar(name='V' ,var=fs%V       )
               call df%pushvar(name='W' ,var=fs%W       )
               call df%pushvar(name='P' ,var=fs%P       )
+              call df%pushvar(name='LM'   ,var=sgs%LM       )
+              call df%pushvar(name='MM'   ,var=sgs%MM       )
+              call df%pushvar(name='visc' ,var=sgs%visc     )
               call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
               ! Write particle file
               call lp%write(filename='restart/part_'//trim(adjustl(timestamp)))
