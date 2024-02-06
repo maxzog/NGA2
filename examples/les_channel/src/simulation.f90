@@ -38,7 +38,11 @@ module simulation
    !> Private work arrays
    real(WP), dimension(:,:,:), allocatable :: resU,resV,resW
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
+   real(WP), dimension(:,:,:), allocatable :: S_
    real(WP), dimension(:,:,:,:), allocatable :: SR
+   real(WP), dimension(:,:,:,:), allocatable :: uiuj
+   real(WP), dimension(:,:), allocatable :: avgUU
+   real(WP), dimension(:), allocatable :: avgSS
    
    !> Statistics
    real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_,U2,U2_
@@ -240,6 +244,7 @@ contains
          allocate(Vi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(Wi  (cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          allocate(SR(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
+         allocate(S_(  cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_))
          ! Allocate postproc arrays
          allocate(Uavg (cfg%jmin:cfg%jmax)); Uavg =0.0_WP
          allocate(Uavg_(cfg%jmin:cfg%jmax)); Uavg_=0.0_WP
@@ -269,6 +274,10 @@ contains
          allocate(pW2_  (1:cfg%ny)); pW2_  =0.0_WP
          allocate(counter (1:cfg%ny)); counter =0.0_WP
          allocate(counter_(1:cfg%ny)); counter_=0.0_WP
+         ! Allocate arrays for Reynolds stress estimation
+         allocate(uiuj(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); uiuj=0.0_WP
+         allocate(avgUU(6,cfg%jmin:cfg%jmax)); avgUU=0.0_WP
+         allocate(avgSS(  cfg%jmin:cfg%jmax)); avgSS=0.0_WP
       end block allocate_work_arrays
 
 
@@ -479,6 +488,11 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
+         call ens_out%add_vector('uu_diagonal',uiuj(1,:,:,:),uiuj(2,:,:,:),uiuj(3,:,:,:))
+         call ens_out%add_vector('uu_offdiagonal',uiuj(4,:,:,:),uiuj(5,:,:,:),uiuj(6,:,:,:))
+         call ens_out%add_vector('UUn_d',sgs%UUn(1,:,:,:),sgs%UUn(2,:,:,:),sgs%UUn(3,:,:,:)) 
+         call ens_out%add_vector('UUn_o',sgs%UUn(4,:,:,:),sgs%UUn(5,:,:,:),sgs%UUn(6,:,:,:)) 
+         call ens_out%add_scalar('dSS',sgs%dSS)
          call ens_out%add_scalar('viscosity',fs%visc)
          call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
@@ -550,8 +564,8 @@ contains
          ppevt=event(time=time,name='Postproc output')
          call param_read('Postproc output period',ppevt%tper)
          ! Perform the output
-         if (ppevt%occurs()) call postproc_vel()
-         if (ppevt%occurs()) call postproc_particles()
+         call postproc_vel()
+         call postproc_particles()
       end block create_postproc
 
    end subroutine simulation_init
@@ -575,16 +589,51 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
 
-         ! Get eddy viscosity
-         call fs%interp_vel(Ui,Vi,Wi)
-         call fs%get_strainrate(SR=SR)
-         fs%visc=visc; resU=fs%rho; resV=fs%visc
+         subgrid: block
+            use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+            use parallel, only: MPI_REAL_WP
+            integer :: i,j,k,ierr
+            avgUU = 0.0_WP; avgSS = 0.0_WP
+            ! Get eddy viscosity
+            call fs%interp_vel(Ui,Vi,Wi)
+            call fs%get_strainrate(SR=SR)
+            S_=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
+            fs%visc=visc; resU=fs%rho; resV=fs%visc
 
-         call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
-         where (sgs%visc.lt.-fs%visc)
-            sgs%visc=-fs%visc
-         end where
-         fs%visc=fs%visc + sgs%visc
+            call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
+            where (sgs%visc.lt.-fs%visc)
+               sgs%visc=-fs%visc
+            end where
+            fs%visc=fs%visc + sgs%visc
+            
+            ! Average the Reynolds stress estimation in homogeneous directions
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
+                     avgUU(:,j) = avgUU(:,j) + sgs%UUn(:,i,j,k) * fs%cfg%vol(i,j,k)
+                     avgSS(j) = avgSS(j) + sgs%dSS(i,j,k) * fs%cfg%vol(i,j,k)
+                  end do
+               end do
+            end do
+            call MPI_ALLREDUCE(MPI_IN_PLACE,avgUU,6*fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,avgSS,  fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+            avgUU(1,:) = avgUU(1,:) / vol
+            avgUU(2,:) = avgUU(2,:) / vol
+            avgUU(3,:) = avgUU(3,:) / vol
+            avgUU(4,:) = avgUU(4,:) / vol
+            avgUU(5,:) = avgUU(5,:) / vol
+            avgUU(6,:) = avgUU(6,:) / vol
+            avgSS = avgSS / vol
+
+            ! Compute the Reynolds stress
+            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
+               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
+                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+                     uiuj(:,i,j,k) = sgs%delta(i,j,k)**2 * S_(i,j,k)**2 * avgUU(:,j) / avgSS(j)
+                  end do
+               end do
+            end do
+         end block subgrid
 
          ! Advance particles
          call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)

@@ -32,7 +32,11 @@ module sgsmodel_class
       real(WP), dimension(:,:,:), allocatable :: LM,MM          !< LM and MM tensor norms
       real(WP), dimension(:,:,:), allocatable :: visc           !< Turbulent eddy viscosity
       real(WP), dimension(:,:,:), allocatable :: Cs_arr         !< Smagorinsky coefficient
-      
+     
+      ! Non-dimensional Reynolds stress terms
+      real(WP), dimension(:,:,:,:), allocatable :: UUn
+      real(WP), dimension(:,:,:),   allocatable :: dSS
+
       ! Some information of the fields
       real(WP) :: max_visc                                      !< Maximum eddy viscosity
       real(WP) :: min_visc                                      !< Minimum eddy viscosity
@@ -243,7 +247,11 @@ contains
       ! Allocate LM and MM
       allocate(self%LM(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LM=0.0_WP
       allocate(self%MM(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%MM=0.0_WP
-      
+     
+      ! Allocate Reynolds stress
+      allocate(self%UUn(1:6,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%UUn=0.0_WP
+      allocate(self%dSS(    self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dSS=0.0_WP
+
       ! Allocate visc
       allocate(self%visc(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc=0.0_WP
       
@@ -316,8 +324,8 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Wi  !< Interpolated velocities including all ghosts
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR  !< Strain rate tensor
       integer :: i,j,k
-      real(WP) :: Frho,FU,FV,FW,FS_
-      real(WP) :: Cs,tau,alpha
+      real(WP) :: Frho,FU,FV,FW,FS_,FSS
+      real(WP) :: Cs,tau,alpha,testDelta
       real(WP), dimension(3) :: pos
       real(WP), dimension(6) :: FSR,FrhoS_SR,FrhoUU,Mij,Lij
       real(WP), dimension(:,:,:), allocatable :: S_,LMold,MMold
@@ -354,6 +362,8 @@ contains
                FSR(5)=sum(this%filtern(:,:,:,i,j,k)*SR(5,i-1:i+1,j-1:j+1,k-1:k+1))
                FSR(6)=sum(this%filtern(:,:,:,i,j,k)*SR(6,i-1:i+1,j-1:j+1,k-1:k+1))
                FS_=sqrt(sum(FSR(1:3)**2+2.0_WP*FSR(4:6)**2))
+               ! Filtered S_*S_ (Neumann) - FOR ESTIMATING REYNOLDS STRESS
+               FSS=sum(this%filtern(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1))/Frho
                ! Filtered rho*S_*SR (Neumann)
                FrhoS_SR(1)=sum(this%filtern(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1)*SR(1,i-1:i+1,j-1:j+1,k-1:k+1))
                FrhoS_SR(2)=sum(this%filtern(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1)*SR(2,i-1:i+1,j-1:j+1,k-1:k+1))
@@ -380,6 +390,10 @@ contains
                ! Compute LM=sum(Lij Mij) and MM=sum(Mij Mij)
                this%LM(i,j,k)=sum(Lij(1:3)*Mij(1:3)+2.0_WP*Lij(4:6)*Mij(4:6))
                this%MM(i,j,k)=sum(Mij(1:3)*Mij(1:3)+2.0_WP*Mij(4:6)*Mij(4:6))
+               ! Compute non-dimensional Reynolds stress
+               testDelta=this%ratio(i,j,k)*this%delta(i,j,k)
+               this%UUn(:,i,j,k) = Lij / Frho
+               this%dSS(i,j,k)   = testDelta**2 * FS_**2 - this%delta(i,j,k)**2 * FSS
             end do
          end do
       end do
