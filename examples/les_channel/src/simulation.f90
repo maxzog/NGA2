@@ -626,9 +626,9 @@ contains
             avgSS = avgSS / vol
 
             ! Compute the Reynolds stress
-            do k=fs%cfg%kmino_,fs%cfg%kmaxo_
-               do j=fs%cfg%jmino_,fs%cfg%jmaxo_
-                  do i=fs%cfg%imino_,fs%cfg%imaxo_
+            do k=fs%cfg%kmin_,fs%cfg%kmax_
+               do j=fs%cfg%jmin_,fs%cfg%jmax_
+                  do i=fs%cfg%imin_,fs%cfg%imax_
                      uiuj(:,i,j,k) = sgs%delta(i,j,k)**2 * S_(i,j,k)**2 * avgUU(:,j) / avgSS(j)
                   end do
                end do
