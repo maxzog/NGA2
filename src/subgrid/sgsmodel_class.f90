@@ -390,7 +390,7 @@ contains
                ! Compute LM=sum(Lij Mij) and MM=sum(Mij Mij)
                this%LM(i,j,k)=sum(Lij(1:3)*Mij(1:3)+2.0_WP*Lij(4:6)*Mij(4:6))
                this%MM(i,j,k)=sum(Mij(1:3)*Mij(1:3)+2.0_WP*Mij(4:6)*Mij(4:6))
-               ! Compute non-dimensional Reynolds stress
+               ! Compute Reynolds stress estimation terms on the entire grid
                testDelta=this%ratio(i,j,k)*this%delta(i,j,k)
                this%UUn(:,i,j,k) = Lij / Frho
                this%dSS(i,j,k)   = testDelta**2 * FS_**2 - this%delta(i,j,k)**2 * FSS
