@@ -140,9 +140,23 @@ contains
 
       ! Create an LES model
       create_sgs: block
+         real(WP) :: tke_sgs,sig_sgs,tau_crwi,delta,sgsv
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
          sgs%visc=0.005_WP
+
+         if (cfg%amRoot) then
+            delta = sgs%delta(fs%cfg%imin_,fs%cfg%jmin_,fs%cfg%kmin_)
+            sgsv  = sgs%visc(fs%cfg%imin_,fs%cfg%jmin_,fs%cfg%kmin_)
+            !> Compute a
+            tke_sgs = (sgsv/delta/0.067_WP)**2    ! SGS tke
+            sig_sgs = sqrt(0.6666_WP*tke_sgs)     ! SGS velocity
+            tau_crwi= sig_sgs/delta              ! Inverse SGS timescale 
+            print *, "TKE :: ", tke_sgs
+            print *, "SIG :: ", sig_sgs
+            print *, "TAU :: ", 1/tau_crwi
+         end if
+
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -323,7 +337,8 @@ contains
          !> ADVANCE PARTICLES
          wt_lpt%time_in=parallel_time()
          resU=fs%rho; resV=fs%visc-sgs%visc
-         call lp%advance_scrw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
+         call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
+       !  call lp%advance_scrw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          !> COMPUTE STATS

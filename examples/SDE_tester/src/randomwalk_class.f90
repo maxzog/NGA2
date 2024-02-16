@@ -474,7 +474,7 @@ contains
             use mathtools, only: Pi,normalize
             integer :: i2,ii,jj,kk,nn
             real(WP), dimension(3) :: r1,r2,r12,dW
-            real(WP) :: corrtp,d12
+            real(WP) :: corrtp,d12,sigma
 
             ! Store particle data
             r1=this%p(i)%pos
@@ -483,6 +483,7 @@ contains
             b_ij    = 0.0_WP
             corrsum = 0.0_WP
             driftsum= 0.0_WP
+            sigma   = 0.7688_WP 
 
             do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
                do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
@@ -506,7 +507,7 @@ contains
 
                         ! Compute relative information
                         r12 = r2-r1
-                        d12  = norm2(r12)
+                        d12 = norm2(r12)
                         call this%correlation_function(r=d12,rho_ij=corrtp)
 
                         if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
@@ -520,7 +521,7 @@ contains
 
                         corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
                         b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
-                        driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
+                        if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(2.0_WP*Sf(d12)/d12 + (Sf(d12+0.001_WP)-Sf(d12-0.001_WP))/0.002_WP)*r12/d12
                      end do
                   end do
                end do
@@ -528,10 +529,9 @@ contains
          end block correlate_neighbors
 
          call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
-
-         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) - a*driftsum(1)*mydt + b_ij(1)/sqrt(corrsum)
-         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) - a*driftsum(2)*mydt + b_ij(2)/sqrt(corrsum)
-         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) - a*driftsum(3)*mydt + b_ij(3)/sqrt(corrsum)
+         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum) - driftsum(1)*mydt
+         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum) - driftsum(2)*mydt
+         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum) - driftsum(3)*mydt
 
          ! Correct with midpoint rule
          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
@@ -585,6 +585,16 @@ contains
         if (verbose.gt.0) call log(message)
      end if
    end block logging
+   contains
+      function Sf(r) result(val)
+         use mathtools, only: Pi
+         real(WP) :: r, val, t1, t2, t3, WIDTH
+         WIDTH=0.1_WP
+         t1 = WIDTH**3*pi**1.5*erf(40/WIDTH)**3
+         t2 = 0.5*WIDTH**3*pi**1.5*erf(40/WIDTH)**2*(erf((40-r)/WIDTH)+erf((40+r)/WIDTH))
+         t3 = 0.5*WIDTH**3*exp(-r**2/(2*WIDTH)**2)*pi**1.5*erf(40/WIDTH)**2*(erf((80-r)/2/WIDTH)+erf((80+r)/2/WIDTH))
+         val = t1 + t2 - 2.0_WP * t3
+      end function Sf
    
  end subroutine advance_scrw
 
@@ -702,7 +712,7 @@ contains
             use mathtools, only: Pi,normalize
             integer :: i2,ii,jj,kk,nn
             real(WP), dimension(3) :: r1,r2,r12,dW
-            real(WP) :: corrtp,d12
+            real(WP) :: corrtp,d12,sigma
 
             ! Store particle data
             r1=this%p(i)%pos
@@ -711,6 +721,7 @@ contains
             b_ij    = 0.0_WP
             corrsum = 0.0_WP
             driftsum= 0.0_WP
+            sigma   = 0.7688_WP 
 
             do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
                do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
@@ -748,7 +759,8 @@ contains
 
                         corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
                         b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
-                        driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
+                        !driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
+                        if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(2.0_WP*Sf(d12)/d12 + (Sf(d12+0.001_WP)-Sf(d12-0.001_WP))/0.002_WP)*r12/d12
                      end do
                   end do
                end do
@@ -757,9 +769,9 @@ contains
 
          call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
 
-         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)! - a*driftsum(1)*mydt
-         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)! - a*driftsum(2)*mydt
-         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)! - a*driftsum(3)*mydt
+         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)! - driftsum(1)*mydt
+         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)! - driftsum(2)*mydt
+         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)! - driftsum(3)*mydt
 
          this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
          this%p(i)%pos=pold%pos + mydt*(this%p(i)%vel + this%p(i)%us)
@@ -811,6 +823,16 @@ contains
         if (verbose.gt.0) call log(message)
      end if
    end block logging
+   contains
+      function Sf(r) result(val)
+         use mathtools, only: Pi
+         real(WP) :: r, val, t1, t2, t3, WIDTH
+         WIDTH=0.1_WP
+         t1 = WIDTH**3*pi**1.5*erf(40/WIDTH)**3
+         t2 = 0.5*WIDTH**3*pi**1.5*erf(40/WIDTH)**2*(erf((40-r)/WIDTH)+erf((40+r)/WIDTH))
+         t3 = 0.5*WIDTH**3*exp(-r**2/(2*WIDTH)**2)*pi**1.5*erf(40/WIDTH)**2*(erf((80-r)/2/WIDTH)+erf((80+r)/2/WIDTH))
+         val = t1 + t2 - 2.0_WP * t3
+      end function Sf
    
  end subroutine advance_scrw_tracer
 
@@ -822,7 +844,7 @@ contains
    real(WP), intent(inout) :: rho_ij
    real(WP) :: Rc, sig
 
-   Rc=0.04_WP
+   Rc=0.1_WP
    sig = 2.0_WP*0.17_WP**2
    select case(this%corr_type)
    case(1)
