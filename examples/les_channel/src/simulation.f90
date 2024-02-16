@@ -41,6 +41,8 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: S_
    real(WP), dimension(:,:,:,:), allocatable :: SR
    real(WP), dimension(:,:,:,:), allocatable :: uiuj
+   real(WP), dimension(:,:,:,:), allocatable :: taudiv
+   real(WP), dimension(:,:,:,:,:), allocatable :: gradu
    real(WP), dimension(:,:), allocatable :: avgUU
    real(WP), dimension(:), allocatable :: avgSS
    
@@ -276,8 +278,10 @@ contains
          allocate(counter_(1:cfg%ny)); counter_=0.0_WP
          ! Allocate arrays for Reynolds stress estimation
          allocate(uiuj(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); uiuj=0.0_WP
+         allocate(taudiv(3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); taudiv=0.0_WP
          allocate(avgUU(6,cfg%jmin:cfg%jmax)); avgUU=0.0_WP
          allocate(avgSS(  cfg%jmin:cfg%jmax)); avgSS=0.0_WP
+         allocate(gradu(3,3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); gradu=0.0_WP
       end block allocate_work_arrays
 
 
@@ -635,8 +639,13 @@ contains
             end do
          end block subgrid
 
+         call fs%get_taurdiv(tau=uiuj,taudiv=taudiv)
+         call fs%get_gradu(gradu=gradu)
+
          ! Advance particles
-         call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
+!!         call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
+         call lp%advance_crw_anisotropic(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV, &
+                                 & sgs_visc=sgs%visc,gradu=gradu,taudiv=taudiv,uiuj=uiuj)
 
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced

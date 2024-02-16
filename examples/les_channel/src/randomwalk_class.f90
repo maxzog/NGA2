@@ -127,6 +127,7 @@ module randomwalk_class
      procedure :: advance_scrw_tracer                    !< Step forward the particle ODEs - spatially-correlated random walk
      procedure :: advance_crw                            !< Step forward the particle ODEs - continuous random walk
      procedure :: advance_crw_fede                       !< Step forward the particle ODEs - continuous random walk with corrections
+     procedure :: advance_crw_anisotropic                !< Step forward the particle ODEs - continuous random walk with anisotropy
      procedure :: correlation_function                   !< Filter kernel for SCRW
      procedure :: get_rhs                                !< Compute rhs of particle odes
      procedure :: get_diffusion                          !< Compute diffusion coefficients
@@ -1436,6 +1437,184 @@ contains
 
   end subroutine advance_crw
 
+  !> Advance the particle equations by a specified time step dt
+  !  using a continuous random walk model with well-mixed preserving drift
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+  subroutine advance_crw_anisotropic(this,dt,U,V,W,rho,visc,sgs_visc,gradu,taudiv,uiuj)
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+    use parallel, only: MPI_REAL_WP
+    use mathtools, only: Pi
+    use random, only: random_normal
+    implicit none
+    class(lpt), intent(inout) :: this
+    real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: taudiv    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: uiuj      !< Reynolds stress
+    real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradu  !< Velocity gradient
+    real(WP), dimension(3) :: acc,tau,gux,guy,guz
+    integer :: i,ierr
+    real(WP) :: rmydt,mydt,dt_done
+    real(WP) :: gu11,gu12,gu13,gu21,gu22,gu23,gu31,gu32,gu33
+    real(WP) :: ux2,uy2,uz2,uxuy
+    real(WP) :: taux,tauy,tauz
+    real(WP) :: a 
+    real(WP), dimension(3,3) :: b_anisotropic
+    type(part) :: myp,pold
+
+    ! Zero out number of particles removed
+    this%np_out=0
+    this%ncol=0.0_WP
+    this%meanUn=0.0_WP
+
+    ! Advance the equations
+    do i=1,this%np_
+       ! Avoid particles with id=0
+       if (this%p(i)%id.eq.0) cycle
+       ! Create local copy of particle
+       myp=this%p(i)
+       ! Time-integrate until dt_done=dt
+       dt_done=0.0_WP
+       do while (dt_done.lt.dt)
+          ! Decide the timestep size
+          mydt=min(myp%dt,dt-dt_done)
+          rmydt=sqrt(mydt)
+          ! Remember the particle
+          pold=myp
+
+          ! Advance with Euler prediction
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+0.5_WP*mydt*myp%vel
+          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
+
+          ! Get drift coefficient
+          call this%get_drift(p=myp,rho=rho,sgs_visc=sgs_visc,a=a)
+         
+          ! Compute Wiener increment
+          myp%dW = [random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP)]
+         
+          ! Correct with midpoint rule
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+mydt*myp%vel
+          myp%vel=pold%vel+mydt*(acc+this%gravity)
+
+          !> Interpolate divergence of SGS stress tensor to particle location
+          taux = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=taudiv(1,:,:,:),bc='n')
+          tauy = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=taudiv(2,:,:,:),bc='n')
+          tauz = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=taudiv(3,:,:,:),bc='n')
+
+          !> Interpolate the velocity gradient tensor to the particle location
+          gu11 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,1,:,:,:),bc='n')
+          gu12 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,2,:,:,:),bc='n')
+          gu13 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,3,:,:,:),bc='n')
+          gu21 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,1,:,:,:),bc='n')
+          gu22 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,2,:,:,:),bc='n')
+          gu23 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,3,:,:,:),bc='n')
+          gu31 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,1,:,:,:),bc='n')
+          gu32 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,2,:,:,:),bc='n')
+          gu33 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,3,:,:,:),bc='n')
+         
+          gux = [gu11,gu21,gu31]
+          guy = [gu12,gu22,gu32]
+          guz = [gu13,gu23,gu33]
+
+          ! Interpolate the Reynolds stress to the particle location
+          ux2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(1,:,:,:),bc='n')
+          uy2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(2,:,:,:),bc='n')
+          uz2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(3,:,:,:),bc='n')
+          uxuy = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(4,:,:,:),bc='n')
+
+          b_anisotropic = 0.0_WP
+          ! Knorps & Pozorski (2021)
+          b_anisotropic(1,1) = sqrt(2.0_WP * a) * sqrt(ux2 - uxuy**2 / ux2)
+          b_anisotropic(2,1) = sqrt(2.0_WP * a) * uxuy / sqrt(uy2)
+          b_anisotropic(2,2) = sqrt(2.0_WP * a) * sqrt(uy2)
+          b_anisotropic(3,3) = sqrt(2.0_WP * a) * sqrt(uz2)
+
+          ! du = [(u \cdot \nabla) <U> + \nabla \cdot \tau] dt + G_ij u dt + B dW
+          myp%Us(1) = (-dot_product(myp%Us(:),gux) + taux)*mydt + (1.0_WP - a*mydt)*myp%Us(1) + &
+                        & dot_product(b_anisotropic(1,:),myp%dW)*rmydt
+          myp%Us(2) = (-dot_product(myp%Us(:),guy) + tauy)*mydt + (1.0_WP - a*mydt)*myp%Us(2) + & 
+                        & dot_product(b_anisotropic(2,:),myp%dW)*rmydt
+          myp%Us(3) = (-dot_product(myp%Us(:),guz) + tauz)*mydt + (1.0_WP - a*mydt)*myp%Us(3) + &
+                        & dot_product(b_anisotropic(3,:),myp%dW)*rmydt
+
+          ! Relocalize
+          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+          ! Increment
+          dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
+            end if
+          end block wall_col
+       end do
+       ! Correct the position to take into account periodicity
+       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       ! Handle particles that have left the domain
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       ! Relocalize the particle
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       ! Count number of particles removed
+       if (myp%flag.eq.1) this%np_out=this%np_out+1
+       ! Copy back to particle
+       if (myp%id.ne.-1) this%p(i)=myp
+    end do
+
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%meanUn,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+    if (this%ncol.ne.0) then
+       this%meanUn=this%meanUn/this%ncol
+    else
+       this%meanUn=0.0_WP
+    end if
+
+    ! Communicate particles
+    call this%sync()
+
+    ! Sum up particles removed
+    call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+    ! Log/screen output
+    logging: block
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use param,    only: verbose
+      use messager, only: log
+      use string,   only: str_long
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+         if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+         if (verbose.gt.0) call log(message)
+      end if
+    end block logging
+
+  end subroutine advance_crw_anisotropic
 
   !> Advance the particle equations by a specified time step dt
   !  using a continuous random walk model with well-mixed preserving drift
