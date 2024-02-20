@@ -596,7 +596,9 @@ contains
          subgrid: block
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
             use parallel, only: MPI_REAL_WP
-            integer :: i,j,k,ierr
+            use messager, only: die
+            integer  :: i,j,k,ierr
+            real(WP) :: tmp1
             avgUU = 0.0_WP; avgSS = 0.0_WP
             ! Get eddy viscosity
             call fs%interp_vel(Ui,Vi,Wi)
@@ -637,6 +639,8 @@ contains
                   end do
                end do
             end do
+            print *, "MAX :: ", MAXVAL(uiuj(1,:,:,:))
+            print *, "MIN :: ", MINVAL(uiuj(1,:,:,:))
          end block subgrid
 
          call fs%get_taurdiv(tau=uiuj,taudiv=taudiv)

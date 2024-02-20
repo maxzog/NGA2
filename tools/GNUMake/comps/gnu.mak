@@ -40,8 +40,8 @@ ifeq ($(DEBUG),TRUE)
   CXXFLAGS += -Og -fno-inline -ggdb -Wall -Wshadow -Wno-sign-compare -ftrapv -Wno-unused-but-set-variable -fallow-argument-mismatch
   CFLAGS   += -Og -fno-inline -ggdb -Wall -Wshadow -Wno-sign-compare -ftrapv -fallow-argument-mismatch
 
-  FFLAGS   += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv -fallow-argument-mismatch
-  F90FLAGS += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv -fallow-argument-mismatch
+  FFLAGS   += -Og -ggdb  -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv -fallow-argument-mismatch
+  F90FLAGS += -Og -ggdb  -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv -fallow-argument-mismatch
 
   ifneq ($(gcc_major_version),$(filter $(gcc_major_version),4 5))
     CXXFLAGS += -Wnull-dereference

@@ -1505,6 +1505,9 @@ contains
           call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
           myp%pos=pold%pos+mydt*myp%vel
           myp%vel=pold%vel+mydt*(acc+this%gravity)
+          
+          ! Relocalize
+          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
 
           !> Interpolate divergence of SGS stress tensor to particle location
           taux = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=taudiv(1,:,:,:),bc='n')
@@ -1531,13 +1534,22 @@ contains
           uy2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(2,:,:,:),bc='n')
           uz2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(3,:,:,:),bc='n')
           uxuy = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(4,:,:,:),bc='n')
+          print *, "pos  :: ", myp%pos(1), myp%pos(2), myp%pos(3)
+          print *, "uxuy :: ", uxuy
+          print *, "ux2  :: ", ux2
 
           b_anisotropic = 0.0_WP
           ! Knorps & Pozorski (2021)
-          b_anisotropic(1,1) = sqrt(2.0_WP * a) * sqrt(ux2 - uxuy**2 / ux2)
+          b_anisotropic(1,1) = sqrt(2.0_WP * a) * sqrt(ux2 - uxuy**2 / uy2)
           b_anisotropic(2,1) = sqrt(2.0_WP * a) * uxuy / sqrt(uy2)
           b_anisotropic(2,2) = sqrt(2.0_WP * a) * sqrt(uy2)
           b_anisotropic(3,3) = sqrt(2.0_WP * a) * sqrt(uz2)
+
+          ! Cholesky decomp of uiuj
+          !b_anisotropic(1,1) = sqrt(2.0_WP * a) * sqrt(ux2)
+          !b_anisotropic(2,1) = sqrt(2.0_WP * a) * uxuy / sqrt(ux2)
+          !b_anisotropic(2,2) = sqrt(2.0_WP * a) * sqrt(uy2 - uxuy**2 / ux2)
+          !b_anisotropic(3,3) = sqrt(2.0_WP * a) * sqrt(uz2)
 
           ! du = [(u \cdot \nabla) <U> + \nabla \cdot \tau] dt + G_ij u dt + B dW
           myp%Us(1) = (-dot_product(myp%Us(:),gux) + taux)*mydt + (1.0_WP - a*mydt)*myp%Us(1) + &
@@ -1547,8 +1559,6 @@ contains
           myp%Us(3) = (-dot_product(myp%Us(:),guz) + tauz)*mydt + (1.0_WP - a*mydt)*myp%Us(3) + &
                         & dot_product(b_anisotropic(3,:),myp%dW)*rmydt
 
-          ! Relocalize
-          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Increment
           dt_done=dt_done+mydt
 
