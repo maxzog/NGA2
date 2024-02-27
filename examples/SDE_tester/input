@@ -20,7 +20,7 @@ Particle density :      1000
 Particle Stokes number : 1.0
 Particle diameter :     5.336E-03 #1.57224E-03
 Number of particles :   250000
-Use SCRW :              .true.
+Use SCRW :              .false.
 Correlation function :  3
 Interpolate fluid velocity : .false. 
 
@@ -31,8 +31,8 @@ SGS model type : 1
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
-Max iter :          5000 #999999
-Max time :          15
+Max iter :          99999
+Max time :          5
 
 # Ensight output
 Ensight output period : 0.01

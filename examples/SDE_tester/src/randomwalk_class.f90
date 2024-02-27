@@ -760,7 +760,8 @@ contains
                         corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
                         b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
                         !driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
-                        if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(2.0_WP*Sf(d12)/d12 + (Sf(d12+0.001_WP)-Sf(d12-0.001_WP))/0.002_WP)*r12/d12
+                        !if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(2.0_WP*Sf(d12)/d12 + (Sf(d12+0.0001_WP)-Sf(d12-0.0001_WP))/0.0002_WP)*r12/d12
+                        if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(Sf(d12+0.0001_WP)-Sf(d12-0.0001_WP))/0.0002_WP*r12/d12
                      end do
                   end do
                end do
@@ -769,9 +770,9 @@ contains
 
          call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
 
-         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)! - driftsum(1)*mydt
-         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)! - driftsum(2)*mydt
-         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)! - driftsum(3)*mydt
+         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum) - driftsum(1)*mydt
+         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum) - driftsum(2)*mydt
+         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum) - driftsum(3)*mydt
 
          this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
          this%p(i)%pos=pold%pos + mydt*(this%p(i)%vel + this%p(i)%us)
