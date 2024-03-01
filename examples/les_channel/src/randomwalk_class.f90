@@ -381,6 +381,8 @@ contains
     this%np_out=0
     ! Zero out number of wall collisions
     this%ncol=0
+    ! Reset meanUn
+    this%meanUn=0.0_WP
 
     ! Advance the equations
     do i=1,this%np_
@@ -1252,13 +1254,15 @@ contains
             use mathtools, only: Pi,normalize
             real(WP) :: d12
             real(WP), dimension(3) :: n12,Un
-            if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
-               d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
-               n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
                n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
-               this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
-               Un=sum(this%p(i)%vel*n12)*n12
-               this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
             end if
           end block wall_col
        end do

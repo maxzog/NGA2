@@ -312,16 +312,17 @@ contains
            df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
         else
            ! If we are not restarting, we will still need a datafile for saving restart files
-           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=7)
+           !df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=7)
+           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
            df%valname(1)='t'
            df%valname(2)='dt'
            df%varname(1)='U'
            df%varname(2)='V'
            df%varname(3)='W'
            df%varname(4)='P'
-           df%varname(5)='LM'
-           df%varname(6)='MM'
-           df%varname(7)='visc'
+!           df%varname(5)='LM'
+!           df%varname(6)='MM'
+!           df%varname(7)='visc'
         end if
       end block restart_and_save
 
@@ -407,14 +408,14 @@ contains
          sgs%Cs_ref=0.1_WP
       end block initialize_sgs
       
-      ! Revisit subgrid model to update arrays (dynamic) if this is a restart
-      update_sgs: block
-         if (restarted) then
-            call df%pullvar(name='LM'   ,var=sgs%LM)
-            call df%pullvar(name='MM'   ,var=sgs%MM)
-            call df%pullvar(name='visc' ,var=sgs%visc)
-         end if
-      end block update_sgs
+!      ! Revisit subgrid model to update arrays (dynamic) if this is a restart
+!      update_sgs: block
+!         if (restarted) then
+!            call df%pullvar(name='LM'   ,var=sgs%LM)
+!            call df%pullvar(name='MM'   ,var=sgs%MM)
+!            call df%pullvar(name='visc' ,var=sgs%visc)
+!         end if
+!      end block update_sgs
 
       ! Initialize LPT solver
       initialize_lpt: block
@@ -593,64 +594,65 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
 
-         subgrid: block
-            use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
-            use parallel, only: MPI_REAL_WP
-            use messager, only: die
-            integer  :: i,j,k,ierr
-            real(WP) :: tmp1
-            avgUU = 0.0_WP; avgSS = 0.0_WP
-            ! Get eddy viscosity
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%get_strainrate(SR=SR)
-            S_=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
-            fs%visc=visc; resU=fs%rho; resV=fs%visc
-
-            call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
-            where (sgs%visc.lt.-fs%visc)
-               sgs%visc=-fs%visc
-            end where
-            fs%visc=fs%visc + sgs%visc
-            
-            ! Average the Reynolds stress estimation in homogeneous directions
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     avgUU(:,j) = avgUU(:,j) + sgs%UUn(:,i,j,k) * fs%cfg%vol(i,j,k)
-                     avgSS(j) = avgSS(j) + sgs%dSS(i,j,k) * fs%cfg%vol(i,j,k)
-                  end do
-               end do
-            end do
-            call MPI_ALLREDUCE(MPI_IN_PLACE,avgUU,6*fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,avgSS,  fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-            avgUU(1,:) = avgUU(1,:) / vol
-            avgUU(2,:) = avgUU(2,:) / vol
-            avgUU(3,:) = avgUU(3,:) / vol
-            avgUU(4,:) = avgUU(4,:) / vol
-            avgUU(5,:) = avgUU(5,:) / vol
-            avgUU(6,:) = avgUU(6,:) / vol
-            avgSS = avgSS / vol
-
-            ! Compute the Reynolds stress
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     uiuj(:,i,j,k) = sgs%delta(i,j,k)**2 * S_(i,j,k)**2 * avgUU(:,j) / avgSS(j)
-                  end do
-               end do
-            end do
-            print *, "MAX :: ", MAXVAL(uiuj(1,:,:,:))
-            print *, "MIN :: ", MINVAL(uiuj(1,:,:,:))
-         end block subgrid
-
-         call fs%get_taurdiv(tau=uiuj,taudiv=taudiv)
-         call fs%get_gradu(gradu=gradu)
-
-         ! Advance particles
-!!         call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
-         call lp%advance_crw_anisotropic(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV, &
-                                 & sgs_visc=sgs%visc,gradu=gradu,taudiv=taudiv,uiuj=uiuj)
-
+!         subgrid: block
+!            use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+!            use parallel, only: MPI_REAL_WP
+!            use messager, only: die
+!            integer  :: i,j,k,ierr
+!            real(WP) :: tmp1
+!            avgUU = 0.0_WP; avgSS = 0.0_WP
+!            ! Get eddy viscosity
+!            call fs%interp_vel(Ui,Vi,Wi)
+!            call fs%get_strainrate(SR=SR)
+!            S_=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
+!            fs%visc=visc; resU=fs%rho; resV=fs%visc
+!
+!            call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
+!            where (sgs%visc.lt.-fs%visc)
+!               sgs%visc=-fs%visc
+!            end where
+!            fs%visc=fs%visc + sgs%visc
+!            
+!            ! Average the Reynolds stress estimation in homogeneous directions
+!            do k=fs%cfg%kmin_,fs%cfg%kmax_
+!               do j=fs%cfg%jmin_,fs%cfg%jmax_
+!                  do i=fs%cfg%imin_,fs%cfg%imax_
+!                     avgUU(:,j) = avgUU(:,j) + sgs%UUn(:,i,j,k) * fs%cfg%vol(i,j,k)
+!                     avgSS(j) = avgSS(j) + sgs%dSS(i,j,k) * fs%cfg%vol(i,j,k)
+!                  end do
+!               end do
+!            end do
+!            call MPI_ALLREDUCE(MPI_IN_PLACE,avgUU,6*fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+!            call MPI_ALLREDUCE(MPI_IN_PLACE,avgSS,  fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+!            avgUU(1,:) = avgUU(1,:) / vol
+!            avgUU(2,:) = avgUU(2,:) / vol
+!            avgUU(3,:) = avgUU(3,:) / vol
+!            avgUU(4,:) = avgUU(4,:) / vol
+!            avgUU(5,:) = avgUU(5,:) / vol
+!            avgUU(6,:) = avgUU(6,:) / vol
+!            avgSS = avgSS / vol
+!
+!            ! Compute the Reynolds stress
+!            do k=fs%cfg%kmin_,fs%cfg%kmax_
+!               do j=fs%cfg%jmin_,fs%cfg%jmax_
+!                  do i=fs%cfg%imin_,fs%cfg%imax_
+!                     uiuj(:,i,j,k) = sgs%delta(i,j,k)**2 * S_(i,j,k)**2 * avgUU(:,j) / avgSS(j)
+!                  end do
+!               end do
+!            end do
+!            print *, "MAX :: ", MAXVAL(uiuj(1,:,:,:))
+!            print *, "MIN :: ", MINVAL(uiuj(1,:,:,:))
+!         end block subgrid
+!
+!         call fs%get_taurdiv(tau=uiuj,taudiv=taudiv)
+!         call fs%get_gradu(gradu=gradu)
+!
+!         ! Advance particles
+!!!         call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
+!         call lp%advance_crw_anisotropic(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV, &
+!                                 & sgs_visc=sgs%visc,gradu=gradu,taudiv=taudiv,uiuj=uiuj)
+         fs%visc=visc; resU=fs%rho; resV=fs%visc
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
          ! Apply time-varying Dirichlet conditions
          ! This is where time-dpt Dirichlet would be enforced
 
