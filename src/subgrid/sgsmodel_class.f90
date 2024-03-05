@@ -32,7 +32,11 @@ module sgsmodel_class
       real(WP), dimension(:,:,:), allocatable :: LM,MM          !< LM and MM tensor norms
       real(WP), dimension(:,:,:), allocatable :: visc           !< Turbulent eddy viscosity
       real(WP), dimension(:,:,:), allocatable :: Cs_arr         !< Smagorinsky coefficient
-      
+     
+      ! Non-dimensional Reynolds stress terms
+      real(WP), dimension(:,:,:,:), allocatable :: UUn
+      real(WP), dimension(:,:,:),   allocatable :: dSS
+
       ! Some information of the fields
       real(WP) :: max_visc                                      !< Maximum eddy viscosity
       real(WP) :: min_visc                                      !< Minimum eddy viscosity
@@ -243,7 +247,11 @@ contains
       ! Allocate LM and MM
       allocate(self%LM(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%LM=0.0_WP
       allocate(self%MM(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%MM=0.0_WP
-      
+     
+      ! Allocate Reynolds stress
+      allocate(self%UUn(1:6,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%UUn=0.0_WP
+      allocate(self%dSS(    self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%dSS=0.0_WP
+
       ! Allocate visc
       allocate(self%visc(self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_)); self%visc=0.0_WP
       
@@ -280,7 +288,7 @@ contains
      case(dynamic_smag)
         if (.not.present(Ui).or..not.(present(Vi)).or..not.present(Wi).or..not.present(SR)) &
              call die('[sgs get_visc] Dynamic Smagorinsky model requires Ui, Vi, Wi, and SR')
-        call this%visc_dynamic(dt,rho,Ui,Vi,Wi,SR,gradu)
+        call this%visc_dynamic(dt,rho,Ui,Vi,Wi,SR)
      case(constant_smag)
         if (.not.present(SR)) call die('[sgs get_visc] Constant Smagorinsky model requires SR')
         call this%visc_cst(rho,SR)
@@ -306,7 +314,7 @@ contains
    
    
    !> Get subgrid scale dynamic viscosity - Dynamic
-   subroutine visc_dynamic(this,dt,rho,Ui,Vi,Wi,SR,gradu)
+   subroutine visc_dynamic(this,dt,rho,Ui,Vi,Wi,SR)
       implicit none
       class(sgsmodel), intent(inout) :: this
       real(WP), intent(in) :: dt !< dt since the last call to the model
@@ -315,10 +323,9 @@ contains
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Vi  !< Interpolated velocities including all ghosts
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: Wi  !< Interpolated velocities including all ghosts
       real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: SR  !< Strain rate tensor
-      real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(in) :: gradu !< Velocity gradient tensor
       integer :: i,j,k
-      real(WP) :: Frho,FU,FV,FW,FS_
-      real(WP) :: Cs,tau,alpha
+      real(WP) :: Frho,FU,FV,FW,FS_,FSS
+      real(WP) :: Cs,tau,alpha,testDelta
       real(WP), dimension(3) :: pos
       real(WP), dimension(6) :: FSR,FrhoS_SR,FrhoUU,Mij,Lij
       real(WP), dimension(:,:,:), allocatable :: S_,LMold,MMold
@@ -336,7 +343,7 @@ contains
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
                ! Skip wall cells
-               if (this%cfg%VF(i,j,k).eq.0.0_WP) then
+               if (this%cfg%VF(i,j,k).lt.epsilon(1.0_WP)) then
                   this%LM(i,j,k)=0.0_WP
                   this%MM(i,j,k)=0.0_WP
                   cycle
@@ -355,6 +362,8 @@ contains
                FSR(5)=sum(this%filtern(:,:,:,i,j,k)*SR(5,i-1:i+1,j-1:j+1,k-1:k+1))
                FSR(6)=sum(this%filtern(:,:,:,i,j,k)*SR(6,i-1:i+1,j-1:j+1,k-1:k+1))
                FS_=sqrt(sum(FSR(1:3)**2+2.0_WP*FSR(4:6)**2))
+               ! Filtered S_*S_ (Neumann) - FOR ESTIMATING REYNOLDS STRESS
+               FSS=sum(this%filtern(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1))/Frho
                ! Filtered rho*S_*SR (Neumann)
                FrhoS_SR(1)=sum(this%filtern(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1)*SR(1,i-1:i+1,j-1:j+1,k-1:k+1))
                FrhoS_SR(2)=sum(this%filtern(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*S_(i-1:i+1,j-1:j+1,k-1:k+1)*SR(2,i-1:i+1,j-1:j+1,k-1:k+1))
@@ -381,6 +390,10 @@ contains
                ! Compute LM=sum(Lij Mij) and MM=sum(Mij Mij)
                this%LM(i,j,k)=sum(Lij(1:3)*Mij(1:3)+2.0_WP*Lij(4:6)*Mij(4:6))
                this%MM(i,j,k)=sum(Mij(1:3)*Mij(1:3)+2.0_WP*Mij(4:6)*Mij(4:6))
+               ! Compute Reynolds stress estimation terms on the entire grid
+               testDelta=this%ratio(i,j,k)*this%delta(i,j,k)
+               this%UUn(:,i,j,k) = Lij / Frho
+               this%dSS(i,j,k)   = testDelta**2 * FS_**2 - this%delta(i,j,k)**2 * FSS
             end do
          end do
       end do
@@ -412,7 +425,7 @@ contains
       do k=this%cfg%kmin_,this%cfg%kmax_
          do j=this%cfg%jmin_,this%cfg%jmax_
             do i=this%cfg%imin_,this%cfg%imax_
-               if (this%MM(i,j,k).ne.0.0_WP) then
+               if (abs(this%MM(i,j,k)).gt.100.0_WP*epsilon(1.0_WP)/this%Cs_ref**2) then
                   Cs=max(this%LM(i,j,k)/this%MM(i,j,k),0.0_WP)
                else
                   Cs=0.0_WP
@@ -431,7 +444,7 @@ contains
    end subroutine visc_dynamic
    
    
-   !> Get subgrid scale dynamic viscosity - Constant
+   !> Get subgrid scale viscosity - Constant coefficient
    subroutine visc_cst(this,rho,SR)
       implicit none
       class(sgsmodel), intent(inout) :: this
