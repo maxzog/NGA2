@@ -128,8 +128,10 @@ module randomwalk_class
      procedure :: advance_crw                            !< Step forward the particle ODEs - continuous random walk
      procedure :: advance_crw_fede                       !< Step forward the particle ODEs - continuous random walk with corrections
      procedure :: advance_crw_anisotropic                !< Step forward the particle ODEs - continuous random walk with anisotropy
+     procedure :: advance_crw_normalized                 !< Step forward the particle ODEs - normalized continuous random walk
      procedure :: correlation_function                   !< Filter kernel for SCRW
      procedure :: get_rhs                                !< Compute rhs of particle odes
+     procedure :: get_tke                                !< Compute SGS TKE at particle location
      procedure :: get_diffusion                          !< Compute diffusion coefficients
      procedure :: get_diffusion_crw                      !< Compute diffusion coefficients
      procedure :: get_drift                              !< Compute drift coefficients
@@ -477,116 +479,6 @@ contains
 
   end subroutine advance
 
-!  subroutine init_pdfs()
-!     use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM
-!     use parallel,only: MPI_REAL_WP
-!     character(5) :: stepstr
-!     character(len=8) :: fmt
-!     character(len=1024) :: filename
-!     real(WP), dimension(65) :: Uax,Vax
-!     real(WP), dimension(64) :: myUpdf,myVpdf,Updf,Vpdf
-!     real(WP) :: binw,Umean,Vmean,Uvar,Vvar,Vmin,Vmax,Umin,Umax
-!     integer, intent(in) :: step
-!     integer :: nbins,bin,i,j
-!
-!     fmt = '(I5.5)'
-!     write(stepstr,fmt) step
-!     filename='./pdfs/wall'//trim(stepstr)//'.dat'
-!     
-!     nbins = 64
-!
-!     Updf=0.0_WP; Vpdf=0.0_WP; Wpdf=0.0_WP
-!
-!     Umin=-3.0_WP; Umax=3.0_WP
-!     Vmin=-3.0_WP; Vmax=3.0_WP
-!     Wmin=-3.0_WP; Wmax=3.0_WP
-!
-!     binw=(Umax-Umin)/nbins
-!
-!     do i=1,nbins+1
-!        Uax(i) = Umin + binw*i
-!        Vax(i) = Vmin + binw*i
-!        Wax(i) = Wmin + binw*i
-!     end do
-!  end subroutine init_pdfs()
-!   
-!   !> Compute and output PDFs of fld vel and part vel
-!   subroutine compute_pdfs(step)
-!      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM
-!      use parallel,only: MPI_REAL_WP
-!      character(5) :: stepstr
-!      character(len=8) :: fmt
-!      character(len=1024) :: filename
-!      real(WP), dimension(65) :: Uax,Vax
-!      real(WP), dimension(64) :: myUpdf,myVpdf,Updf,Vpdf
-!      real(WP) :: binw,Umean,Vmean,Uvar,Vvar,Vmin,Vmax,Umin,Umax
-!      integer, intent(in) :: step
-!      integer :: nbins,bin,i,j
-!
-!      fmt = '(I5.5)'
-!      write(stepstr,fmt) step
-!      filename='./pdfs/wall'//trim(stepstr)//'.dat'
-!      
-!      nbins = 64
-!
-!      Updf=0.0_WP; Vpdf=0.0_WP; Wpdf=0.0_WP
-!
-!      Umin=-3.0_WP; Umax=3.0_WP
-!      Vmin=-3.0_WP; Vmax=3.0_WP
-!      Wmin=-3.0_WP; Wmax=3.0_WP
-!
-!      binw=(Umax-Umin)/nbins
-!
-!      do i=1,nbins+1
-!         Uax(i) = Umin + binw*i
-!         Vax(i) = Vmin + binw*i
-!         Wax(i) = Wmin + binw*i
-!      end do
-!
-!      do i=1,lp%np_
-!         bin = CEILING(lp%p(i)%vel(1)/binw, 1)
-!         if (bin.lt.0) then
-!            bin = (nbins-1.0_WP)/2.0_WP - ABS(bin)
-!         else
-!            bin = ABS(bin) + (nbins-1.0_WP)/2.0_WP
-!         end if
-!         Updf(bin) = Updf(bin) + 1.0_WP
-!         
-!         bin = CEILING(lp%p(i)%vel(2)/binw, 1)
-!         if (bin.lt.0) then
-!            bin = (nbins-1.0_WP)/2.0_WP - ABS(bin)
-!         else
-!            bin = ABS(bin) + (nbins-1.0_WP)/2.0_WP
-!         end if
-!         Vpdf(bin) = Vpdf(bin) + 1.0_WP
-!
-!         bin = CEILING(lp%p(i)%vel(3)/binw, 1)
-!         if (bin.lt.0) then
-!            bin = (nbins-1.0_WP)/2.0_WP - ABS(bin)
-!         else
-!            bin = ABS(bin) + (nbins-1.0_WP)/2.0_WP
-!         end if
-!         Wpdf(bin) = Wpdf(bin) + 1.0_WP
-!      end do
-!
-!      Updf = Updf / sum(Updf) / binw
-!      Vpdf = Vpdf / sum(Vpdf) / binw
-!      Wpdf = Wpdf / sum(Wpdf) / binw
-!
-!      open(1, file = filename, status='unknown')
-!      do i=1,nbins
-!         write(1,*) Updf(i), Vpdf(i), Wpdf(i)
-!      end do
-!      close(1)
-!
-!      open(2, file = './pdfs/axes.dat', status='unknown')
-!      do i=1,nbins+1
-!         write(2,*) Uax(i), Vax(i), Wax(i)
-!      end do
-!      close(2)
-!
-!   end subroutine compute_pdfs
-
   subroutine get_drift(this, p, rho, sgs_visc, a)
    use random, only: random_normal
    implicit none
@@ -610,6 +502,27 @@ contains
 
    a = tau_crwi
   end subroutine get_drift
+
+  subroutine get_tke(this, p, rho, sgs_visc, tke)
+   use random, only: random_normal
+   implicit none
+   class(lpt), intent(inout) :: this
+   type(part), intent(inout) :: p
+   real(WP), intent(inout) :: tke
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho           !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:
+   real(WP), dimension(3) :: fvel
+   real(WP) :: fvisc,frho,delta
+
+   !> Interpolate values
+   frho =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho     ,    bc='n')
+   fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=sgs_visc,    bc='n')
+   delta=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%cfg%vol,bc='n')
+   delta=delta**(0.333333_WP)
+
+   !> Compute TKE
+   tke = (fvisc/frho/delta/0.067_WP)**2
+  end subroutine get_tke
 
   subroutine get_diffusion(this, p, rho, sgs_visc, U, V, W, b)
    use random, only: random_normal
@@ -1774,6 +1687,167 @@ contains
     end block logging
 
   end subroutine advance_crw_fede
+
+  !> Advance the particle equations by a specified time step dt
+  !  using a continuous random walk model with well-mixed preserving drift
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+  subroutine advance_crw_normalized(this,dt,U,V,W,rho,visc,sgs_visc,gradu,dtaurdx,dtaurdy,dtaurdz)
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER
+    use mathtools, only: Pi
+    use random, only: random_normal
+    implicit none
+    class(lpt), intent(inout) :: this
+    real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtaurdx   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtaurdy   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtaurdz   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradu !< Velocity gradient
+    real(WP), dimension(3) :: acc,tau,gux,guy,guz,rms_new,rms_old
+    integer :: i,ierr
+    real(WP) :: rmydt,mydt,dt_done
+    real(WP) :: gu11,gu12,gu13,gu21,gu22,gu23,gu31,gu32,gu33
+    real(WP) :: a,b,tke    ! Coefficients of OU process 
+    type(part) :: myp,pold
+
+    ! Zero out number of particles removed
+    this%np_out=0
+
+    ! Advance the equations
+    do i=1,this%np_
+       ! Avoid particles with id=0
+       if (this%p(i)%id.eq.0) cycle
+       ! Create local copy of particle
+       myp=this%p(i)
+       ! Time-integrate until dt_done=dt
+       dt_done=0.0_WP
+       do while (dt_done.lt.dt)
+          ! Decide the timestep size
+          mydt=min(myp%dt,dt-dt_done)
+          rmydt=sqrt(mydt)
+          ! Remember the particle
+          pold=myp
+
+          ! Advance with Euler prediction
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+0.5_WP*mydt*myp%vel
+          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
+
+          ! Get diffusion coefficient
+          call this%get_diffusion_crw(p=myp,rho=rho,sgs_visc=sgs_visc,b=b)
+          call this%get_drift(p=myp,rho=rho,sgs_visc=sgs_visc,a=a)
+         
+          ! Compute Wiener increment
+          myp%dW = [random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP)]
+         
+          ! Correct with midpoint rule
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+mydt*myp%vel
+          myp%vel=pold%vel+mydt*(acc+this%gravity)
+
+          !> Interpolate divergence of SGS stress tensor to particle location
+          tau = this%cfg%get_velocity(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),U=dtaurdx,V=dtaurdy,W=dtaurdz)    
+
+          !> Interpolate the velocity gradient tensor to the particle location
+          gu11 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,1,:,:,:),bc='n')
+          gu12 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,2,:,:,:),bc='n')
+          gu13 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,3,:,:,:),bc='n')
+          gu21 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,1,:,:,:),bc='n')
+          gu22 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,2,:,:,:),bc='n')
+          gu23 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,3,:,:,:),bc='n')
+          gu31 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,1,:,:,:),bc='n')
+          gu32 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,2,:,:,:),bc='n')
+          gu33 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,3,:,:,:),bc='n')
+          
+          gux = [gu11,gu21,gu31]
+          guy = [gu12,gu22,gu32]
+          guz = [gu13,gu23,gu33]
+
+          ! TODO: 
+          ! - Get y+ during runtime
+          ! - Implement y+ RMS profile (It's for RANS... scale w/ subgrid estimate instead?)
+          ! - Implement y+ tau corrections for near-wall drift
+          ! NOTE: Bons masters thesis - profiles end at y+=100
+
+          !! u/s = u/s + [dsdy - u/(s*tau)]*dt + sqrt(2/tau)*dW
+          myp%Us(1) = (-dot_product(myp%Us(:),gux) + tau(1))*mydt + (1.0_WP - a*mydt)*myp%Us(1) + b*myp%dW(1)*rmydt
+          myp%Us(2) = (-dot_product(myp%Us(:),guy) + tau(2))*mydt + (1.0_WP - a*mydt)*myp%Us(2) + b*myp%dW(2)*rmydt
+          myp%Us(3) = (-dot_product(myp%Us(:),guz) + tau(3))*mydt + (1.0_WP - a*mydt)*myp%Us(3) + b*myp%dW(3)*rmydt
+
+          ! Get RMS at step (n) and (n+1)
+          call get_tke(pold, rho, sgs_visc, tke)
+          rms_old = sqrt(2.0_WP / 3.0_WP * tke)
+          call get_tke(myp , rho, sgs_visc, tke)
+          rms_new = sqrt(2.0_WP / 3.0_WP * tke)
+
+          ! Normalize then scale with RMS at new location
+          myp%Us = rms_new * myp%Us / rms_old
+
+          ! Relocalize
+          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+          ! Increment
+          dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
+               d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
+               Un=sum(this%p(i)%vel*n12)*n12
+               this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+            end if
+          end block wall_col
+       end do
+       ! Correct the position to take into account periodicity
+       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       ! Handle particles that have left the domain
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       ! Relocalize the particle
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       ! Count number of particles removed
+       if (myp%flag.eq.1) this%np_out=this%np_out+1
+       ! Copy back to particle
+       if (myp%id.ne.-1) this%p(i)=myp
+    end do
+
+    ! Communicate particles
+    call this%sync()
+
+    ! Sum up particles removed
+    call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+    ! Log/screen output
+    logging: block
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use param,    only: verbose
+      use messager, only: log
+      use string,   only: str_long
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+         if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+         if (verbose.gt.0) call log(message)
+      end if
+    end block logging
+
+  end subroutine advance_crw_normalized
 
   !> Calculate RHS of the particle ODEs
   subroutine get_rhs(this,U,V,W,rho,visc,p,acc,opt_dt)
