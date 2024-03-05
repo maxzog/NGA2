@@ -5,7 +5,6 @@ module simulation
    use fft2d_class,       only: fft2d
    use ddadi_class,       only: ddadi
    use incomp_class,      only: incomp
-   use sgsmodel_class,    only: sgsmodel
    use randomwalk_class,  only: lpt
    use datafile_class,    only: datafile
    use timetracker_class, only: timetracker
@@ -22,7 +21,6 @@ module simulation
    type(fft2d),       public :: ps
    type(ddadi),       public :: vs
    type(lpt),         public :: lp
-   type(sgsmodel),    public :: sgs
    type(datafile),    public :: df
 
    !> Ensight postprocessing
@@ -312,17 +310,13 @@ contains
            df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
         else
            ! If we are not restarting, we will still need a datafile for saving restart files
-           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=7)
-           !df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
+           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
            df%valname(1)='t'
            df%valname(2)='dt'
            df%varname(1)='U'
            df%varname(2)='V'
            df%varname(3)='W'
            df%varname(4)='P'
-           df%varname(5)='LM'
-           df%varname(6)='MM'
-           df%varname(7)='visc'
         end if
       end block restart_and_save
 
@@ -402,20 +396,6 @@ contains
          call fs%get_div()
       end block create_and_initialize_flow_solver
       
-      ! Initialize the LES model
-      initialize_sgs: block
-         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
-         sgs%Cs_ref=0.1_WP
-      end block initialize_sgs
-      
-      ! Revisit subgrid model to update arrays (dynamic) if this is a restart
-      update_sgs: block
-         if (restarted) then
-            call df%pullvar(name='LM'   ,var=sgs%LM)
-            call df%pullvar(name='MM'   ,var=sgs%MM)
-            call df%pullvar(name='visc' ,var=sgs%visc)
-         end if
-      end block update_sgs
 
       ! Initialize LPT solver
       initialize_lpt: block
@@ -493,12 +473,6 @@ contains
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
-!         call ens_out%add_vector('uu_diagonal',uiuj(1,:,:,:),uiuj(2,:,:,:),uiuj(3,:,:,:))
-!         call ens_out%add_vector('uu_offdiagonal',uiuj(4,:,:,:),uiuj(5,:,:,:),uiuj(6,:,:,:))
-!         call ens_out%add_vector('UUn_d',sgs%UUn(1,:,:,:),sgs%UUn(2,:,:,:),sgs%UUn(3,:,:,:)) 
-!         call ens_out%add_vector('UUn_o',sgs%UUn(4,:,:,:),sgs%UUn(5,:,:,:),sgs%UUn(6,:,:,:)) 
-!         call ens_out%add_scalar('dSS',sgs%dSS)
-         call ens_out%add_scalar('viscosity',fs%visc)
          call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -578,7 +552,6 @@ contains
 
    !> Time integrate our problem
    subroutine simulation_run
-      use sgsmodel_class, only: dynamic_smag
       implicit none
 
       ! Perform time integration
@@ -594,65 +567,10 @@ contains
          fs%Vold=fs%V
          fs%Wold=fs%W
 
-         subgrid: block
-            use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
-            use parallel, only: MPI_REAL_WP
-            use messager, only: die
-            integer  :: i,j,k,ierr
-            real(WP) :: tmp1
-            avgUU = 0.0_WP; avgSS = 0.0_WP
-            ! Get eddy viscosity
-            call fs%interp_vel(Ui,Vi,Wi)
-            call fs%get_strainrate(SR=SR)
-            S_=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
-            fs%visc=visc; resU=fs%rho; resV=fs%visc
-
-            call sgs%get_visc(type=dynamic_smag,rho=resU,dt=time%dt,SR=SR,Ui=Ui,Vi=Vi,Wi=Wi)
-            where (sgs%visc.lt.-fs%visc)
-               sgs%visc=-fs%visc
-            end where
-            fs%visc=fs%visc + sgs%visc
-            
-            ! Average the Reynolds stress estimation in homogeneous directions
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     avgUU(:,j) = avgUU(:,j) + sgs%UUn(:,i,j,k) * fs%cfg%vol(i,j,k)
-                     avgSS(j) = avgSS(j) + sgs%dSS(i,j,k) * fs%cfg%vol(i,j,k)
-                  end do
-               end do
-            end do
-            call MPI_ALLREDUCE(MPI_IN_PLACE,avgUU,6*fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,avgSS,  fs%cfg%ny,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
-            avgUU(1,:) = avgUU(1,:) / vol
-            avgUU(2,:) = avgUU(2,:) / vol
-            avgUU(3,:) = avgUU(3,:) / vol
-            avgUU(4,:) = avgUU(4,:) / vol
-            avgUU(5,:) = avgUU(5,:) / vol
-            avgUU(6,:) = avgUU(6,:) / vol
-            avgSS = avgSS / vol
-
-            ! Compute the Reynolds stress
-            do k=fs%cfg%kmin_,fs%cfg%kmax_
-               do j=fs%cfg%jmin_,fs%cfg%jmax_
-                  do i=fs%cfg%imin_,fs%cfg%imax_
-                     uiuj(:,i,j,k) = sgs%delta(i,j,k)**2 * S_(i,j,k)**2 * avgUU(:,j) / avgSS(j)
-                  end do
-               end do
-            end do
-            print *, "MAX :: ", MAXVAL(uiuj(1,:,:,:))
-            print *, "MIN :: ", MINVAL(uiuj(1,:,:,:))
-         end block subgrid
-
-         call fs%get_taurdiv(tau=uiuj,taudiv=taudiv)
-         call fs%get_gradu(gradu=gradu)
-
-         ! Advance particles
-         call lp%advance_drw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
-!!         call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
-!!         call lp%advance_crw_anisotropic(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV, &
-!!                                 & sgs_visc=sgs%visc,gradu=gradu,taudiv=taudiv,uiuj=uiuj)
-!!         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
+         fs%visc=visc; resU=fs%rho; resV=fs%visc
+         call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
+         ! Apply time-varying Dirichlet conditions
+         ! This is where time-dpt Dirichlet would be enforced
 
          ! Perform sub-iterations
          do while (time%it.le.time%itmax)
@@ -794,9 +712,6 @@ contains
               call df%pushvar(name='V' ,var=fs%V       )
               call df%pushvar(name='W' ,var=fs%W       )
               call df%pushvar(name='P' ,var=fs%P       )
-              call df%pushvar(name='LM'   ,var=sgs%LM       )
-              call df%pushvar(name='MM'   ,var=sgs%MM       )
-              call df%pushvar(name='visc' ,var=sgs%visc     )
               call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
               ! Write particle file
               call lp%write(filename='restart/part_'//trim(adjustl(timestamp)))
