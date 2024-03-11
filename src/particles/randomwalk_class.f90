@@ -853,7 +853,7 @@ contains
    integer, dimension(:,:,:), allocatable :: npic
    integer, dimension(:,:,:,:), allocatable :: ipic
    real(WP) :: rmydt,mydt,dt_done
-   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
    real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf
    real(WP), dimension(3,3) :: L,Linv
    type(part) :: pold,p1,p2
@@ -980,77 +980,79 @@ contains
             end do
          end do
 
-         ! Correlate drift
-         do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
-            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
-               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
-                  ! Loop over particles in that cell
-                  do nn=1,npic(ii,jj,kk)  
-                     ! Get index of neighbor particle
-                     i2=ipic(nn,ii,jj,kk)
-
-                     ! Get relevant data from correct storage
-                     if (i2.gt.0) then
-                        r2=this%p(i2)%pos
-                     else if (i2.lt.0) then
-                        i2=-i2
-                        r2=this%g(i2)%pos
-                     end if
-
-                     ! Compute relative information
-                     r12 = r1-r2
-                     d12  = norm2(r12)
-                      if (this%p(i)%id.ne.this%p(i2)%id) then
-                           dWdx = gradW(d12,delta,p1%pos,p2%pos)
-                           L(1,1) = L(1,1) + (p2%pos(1)-p1%pos(1))*dWdx(1)
-                           L(1,2) = L(1,2) + (p2%pos(1)-p1%pos(1))*dWdx(2)
-                           L(1,3) = L(1,3) + (p2%pos(1)-p1%pos(1))*dWdx(3)
-                           L(2,1) = L(2,1) + (p2%pos(2)-p1%pos(2))*dWdx(1)
-                           L(2,2) = L(2,2) + (p2%pos(2)-p1%pos(2))*dWdx(2)
-                           L(2,3) = L(2,3) + (p2%pos(2)-p1%pos(2))*dWdx(3)
-                           L(3,1) = L(3,1) + (p2%pos(3)-p1%pos(3))*dWdx(1)
-                           L(3,2) = L(3,2) + (p2%pos(3)-p1%pos(3))*dWdx(2)
-                           L(3,3) = L(3,3) + (p2%pos(3)-p1%pos(3))*dWdx(3)
-                        end if
-                  end do
-               end do
-            end do
-             ! Invert L matrix for gradient correction
-            call inverse_matrix(L,Linv,3)
-
-            driftsum=0.0_WP
-             do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
-            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
-               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
-                  ! Loop over particles in that cell
-                  do nn=1,npic(ii,jj,kk)  
-                     ! Get index of neighbor particle
-                     i2=ipic(nn,ii,jj,kk)
-
-                     ! Get relevant data from correct storage
-                     if (i2.gt.0) then
-                        r2=this%p(i2)%pos
-                        usj=this%p(i2)%us
-                     else if (i2.lt.0) then
-                        i2=-i2
-                        r2=this%g(i2)%pos
-                        usj=this%g(i2)%us
-                     end if
-
-                     ! Compute relative information
-                     r12 = r1-r2
-                     d12  = norm2(r12)
-                      if (this%p(i)%id.ne.this%p(i2)%id) then
-                         ! Compute the gradient
-                         buf=gradW(d12,delta,p1%pos,p2%pos)
-                         dWdx(1) = sum(L(1,:)*buf)
-                         dWdx(2) = sum(L(2,:)*buf)
-                         dWdx(3) = sum(L(3,:)*buf)
-                         driftsum=driftsum+dWdx*(usj-this%p(i)%us)**2
-                      end if
-                  end do
-               end do
-            end do
+!!         ! Correlate drift
+!!         do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
+!!            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
+!!               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
+!!                  ! Loop over particles in that cell
+!!                  do nn=1,npic(ii,jj,kk)  
+!!                     ! Get index of neighbor particle
+!!                     i2=ipic(nn,ii,jj,kk)
+!!
+!!                     ! Get relevant data from correct storage
+!!                     if (i2.gt.0) then
+!!                        r2=this%p(i2)%pos
+!!                     else if (i2.lt.0) then
+!!                        i2=-i2
+!!                        r2=this%g(i2)%pos
+!!                     end if
+!!
+!!                     ! Compute relative information
+!!                     r12 = r1-r2
+!!                     d12  = norm2(r12)
+!!                      if (this%p(i)%id.ne.this%p(i2)%id) then
+!!                           dWdx = gradW(d12,delta,p1%pos,p2%pos)
+!!                           L(1,1) = L(1,1) + (p2%pos(1)-p1%pos(1))*dWdx(1)
+!!                           L(1,2) = L(1,2) + (p2%pos(1)-p1%pos(1))*dWdx(2)
+!!                           L(1,3) = L(1,3) + (p2%pos(1)-p1%pos(1))*dWdx(3)
+!!                           L(2,1) = L(2,1) + (p2%pos(2)-p1%pos(2))*dWdx(1)
+!!                           L(2,2) = L(2,2) + (p2%pos(2)-p1%pos(2))*dWdx(2)
+!!                           L(2,3) = L(2,3) + (p2%pos(2)-p1%pos(2))*dWdx(3)
+!!                           L(3,1) = L(3,1) + (p2%pos(3)-p1%pos(3))*dWdx(1)
+!!                           L(3,2) = L(3,2) + (p2%pos(3)-p1%pos(3))*dWdx(2)
+!!                           L(3,3) = L(3,3) + (p2%pos(3)-p1%pos(3))*dWdx(3)
+!!                        end if
+!!                  end do
+!!               end do
+!!            end do
+!!         end do
+!!         ! Invert L matrix for gradient correction
+!!         call inverse_matrix(L,Linv,3)
+!!
+!!         driftsum=0.0_WP
+!!         do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
+!!            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
+!!               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
+!!                  ! Loop over particles in that cell
+!!                  do nn=1,npic(ii,jj,kk)  
+!!                     ! Get index of neighbor particle
+!!                     i2=ipic(nn,ii,jj,kk)
+!!
+!!                     ! Get relevant data from correct storage
+!!                     if (i2.gt.0) then
+!!                        r2=this%p(i2)%pos
+!!                        usj=this%p(i2)%us
+!!                     else if (i2.lt.0) then
+!!                        i2=-i2
+!!                        r2=this%g(i2)%pos
+!!                        usj=this%g(i2)%us
+!!                     end if
+!!
+!!                     ! Compute relative information
+!!                     r12 = r1-r2
+!!                     d12  = norm2(r12)
+!!                      if (this%p(i)%id.ne.this%p(i2)%id) then
+!!                         ! Compute the gradient
+!!                         buf=gradW(d12,delta,p1%pos,p2%pos)
+!!                         dWdx(1) = sum(L(1,:)*buf)
+!!                         dWdx(2) = sum(L(2,:)*buf)
+!!                         dWdx(3) = sum(L(3,:)*buf)
+!!                         driftsum=driftsum+dWdx*(usj-this%p(i)%us)**2
+!!                      end if
+!!                  end do
+!!               end do
+!!            end do
+!!         end do
 
          call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
 
