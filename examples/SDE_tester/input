@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	4 4 2
+Partition :	1 2 2
 
 # Mesh definition
 Lx :	6.2832
@@ -19,7 +19,7 @@ Force to maximum Re_lambda : .false.
 Particle density :      1000
 Particle Stokes number : 1.0
 Particle diameter :     5.336E-03 #1.57224E-03
-Number of particles :   250000
+Number of particles :   25000
 Use SCRW :              .true.
 Correlation function :  3
 Interpolate fluid velocity : .false. 

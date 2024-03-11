@@ -837,7 +837,7 @@ contains
   !> p%id=-1=> no coll, no move
  subroutine advance_scrw_tracer(this,dt,U,V,W,rho,sgs_visc)
    use mpi_f08,    only: MPI_SUM,MPI_INTEGER
-   use mathtools,  only: Pi
+   use mathtools,  only: Pi,normalize,inverse_matrix
    use random,     only: random_normal
    use messager,   only: die
    implicit none
@@ -849,20 +849,23 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(3) :: b_ij,driftsum,usj
-   integer :: i,ierr,no
+   integer :: i,ierr,no,i2,ii,jj,kk,nn
    integer, dimension(:,:,:), allocatable :: npic
    integer, dimension(:,:,:,:), allocatable :: ipic
    real(WP) :: rmydt,mydt,dt_done
-   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3 
-   type(part) :: pold
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12
+   real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf
+   real(WP), dimension(3,3) :: L,Linv
+   type(part) :: pold,p1,p2
 
    ! Zero out number of particles removed
    this%np_out=0
 
    do i=1,this%np_
+      call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
       this%p(i)%dW =   [random_normal(m=0.0_WP, sd=1.0_WP), & 
                      &  random_normal(m=0.0_WP, sd=1.0_WP), &
-                     &  random_normal(m=0.0_WP, sd=1.0_WP)]
+                     &  random_normal(m=0.0_WP, sd=1.0_WP)] * b
    end do
    
    ! Share particles across overlap
@@ -900,30 +903,17 @@ contains
          ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
          npic(ip,jp,kp)=npic(ip,jp,kp)+1
          ipic(npic(ip,jp,kp),ip,jp,kp)=i
-
-         ! Diffusion
-         ! this%p(i)%dW = [random_normal(m=0.0_WP, sd=1.0_WP), & 
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP), &
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP)]
-         call get_diffusion_crw(this=this,p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
-         this%p(i)%dW = b * this%p(i)%dW 
       end do
       do i=1,this%ng_
          ! PIC map
          ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
          npic(ip,jp,kp)=npic(ip,jp,kp)+1
          ipic(npic(ip,jp,kp),ip,jp,kp)=-i
-
-         ! Diffusion
-         ! this%g(i)%dW = [random_normal(m=0.0_WP, sd=1.0_WP), & 
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP), &
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP)]
-         call get_diffusion_crw(this=this,p=this%g(i),rho=rho,sgs_visc=sgs_visc,b=b)
-         this%g(i)%dW = b * this%g(i)%dW
       end do
    end block pic_prep
    
    ! Advance the equations
+   delta=0.5_WP*this%cfg%min_meshsize
    do i=1,this%np_
       ! Avoid particles with id=0
       if (this%p(i)%id.eq.0) cycle
@@ -941,63 +931,126 @@ contains
          !call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
          this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
          this%p(i)%pos=pold%pos + 0.5_WP*mydt*(this%p(i)%vel + this%p(i)%us)
-         
-         correlate_neighbors: block
-            use mathtools, only: Pi,normalize
-            integer :: i2,ii,jj,kk,nn
-            real(WP), dimension(3) :: r1,r2,r12,dW
-            real(WP) :: corrtp,d12
 
-            ! Store particle data
-            r1=this%p(i)%pos
+         ! Store particle data
+         r1=this%p(i)%pos
 
-            ! Zero out neighbor contribution
-            b_ij    = 0.0_WP
-            corrsum = 0.0_WP
-            driftsum= 0.0_WP
+         ! Correlate diffusion
+         b_ij    = 0.0_WP
+         corrsum = 0.0_WP
+         do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
+            do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
+               do ii=this%p(i)%ind(1)-no+1,this%p(i)%ind(1)+no-1
+                  ! Loop over particles in that cell
+                  do nn=1,npic(ii,jj,kk)  
+                     ! Get index of neighbor particle
+                     i2=ipic(nn,ii,jj,kk)
 
-            do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
-               do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
-                  do ii=this%p(i)%ind(1)-no+1,this%p(i)%ind(1)+no-1
-                     ! Loop over particles in that cell
-                     do nn=1,npic(ii,jj,kk)  
-                        ! Get index of neighbor particle
-                        i2=ipic(nn,ii,jj,kk)
+                     ! Get relevant data from correct storage
+                     if (i2.gt.0) then
+                        r2=this%p(i2)%pos
+                        dW=this%p(i2)%dW
+                        usj=this%p(i2)%us
+                     else if (i2.lt.0) then
+                        i2=-i2
+                        r2=this%g(i2)%pos
+                        dW=this%g(i2)%dW
+                        usj=this%g(i2)%us
+                     end if
 
-                        ! Get relevant data from correct storage
-                        if (i2.gt.0) then
-                           r2=this%p(i2)%pos
-                           dW=this%p(i2)%dW
-                           usj=this%p(i2)%us
-                        else if (i2.lt.0) then
-                           i2=-i2
-                           r2=this%g(i2)%pos
-                           dW=this%g(i2)%dW
-                           usj=this%g(i2)%us
-                        end if
+                     ! Compute relative information
+                     r12 = r2-r1
+                     d12  = norm2(r12)
+                     call this%correlation_function(r=d12,rho_ij=corrtp)
 
-                        ! Compute relative information
-                        r12 = r2-r1
-                        d12  = norm2(r12)
-                        call this%correlation_function(r=d12,rho_ij=corrtp)
+                     if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
+                        print *, corrtp
+                        call die("[advance] corr > 1")
+                     end if
+                     if (corrtp.lt.0.0_WP) then 
+                        print *, corrtp
+                        call die("[advance] corr < 0")
+                     end if
 
-                        if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
-                           print *, corrtp
-                           call die("[advance] corr > 1")
-                        end if
-                        if (corrtp.lt.0.0_WP) then 
-                           print *, corrtp
-                           call die("[advance] corr < 0")
-                        end if
-
-                        corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
-                        b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
-                        driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
-                     end do
+                     corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
+                     b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
+                     !driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
                   end do
                end do
             end do
-         end block correlate_neighbors
+         end do
+
+         ! Correlate drift
+         do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
+            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
+               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
+                  ! Loop over particles in that cell
+                  do nn=1,npic(ii,jj,kk)  
+                     ! Get index of neighbor particle
+                     i2=ipic(nn,ii,jj,kk)
+
+                     ! Get relevant data from correct storage
+                     if (i2.gt.0) then
+                        r2=this%p(i2)%pos
+                     else if (i2.lt.0) then
+                        i2=-i2
+                        r2=this%g(i2)%pos
+                     end if
+
+                     ! Compute relative information
+                     r12 = r1-r2
+                     d12  = norm2(r12)
+                      if (this%p(i)%id.ne.this%p(i2)%id) then
+                           dWdx = gradW(d12,delta,p1%pos,p2%pos)
+                           L(1,1) = L(1,1) + (p2%pos(1)-p1%pos(1))*dWdx(1)
+                           L(1,2) = L(1,2) + (p2%pos(1)-p1%pos(1))*dWdx(2)
+                           L(1,3) = L(1,3) + (p2%pos(1)-p1%pos(1))*dWdx(3)
+                           L(2,1) = L(2,1) + (p2%pos(2)-p1%pos(2))*dWdx(1)
+                           L(2,2) = L(2,2) + (p2%pos(2)-p1%pos(2))*dWdx(2)
+                           L(2,3) = L(2,3) + (p2%pos(2)-p1%pos(2))*dWdx(3)
+                           L(3,1) = L(3,1) + (p2%pos(3)-p1%pos(3))*dWdx(1)
+                           L(3,2) = L(3,2) + (p2%pos(3)-p1%pos(3))*dWdx(2)
+                           L(3,3) = L(3,3) + (p2%pos(3)-p1%pos(3))*dWdx(3)
+                        end if
+                  end do
+               end do
+            end do
+             ! Invert L matrix for gradient correction
+            call inverse_matrix(L,Linv,3)
+
+            driftsum=0.0_WP
+             do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
+            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
+               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
+                  ! Loop over particles in that cell
+                  do nn=1,npic(ii,jj,kk)  
+                     ! Get index of neighbor particle
+                     i2=ipic(nn,ii,jj,kk)
+
+                     ! Get relevant data from correct storage
+                     if (i2.gt.0) then
+                        r2=this%p(i2)%pos
+                        usj=this%p(i2)%us
+                     else if (i2.lt.0) then
+                        i2=-i2
+                        r2=this%g(i2)%pos
+                        usj=this%g(i2)%us
+                     end if
+
+                     ! Compute relative information
+                     r12 = r1-r2
+                     d12  = norm2(r12)
+                      if (this%p(i)%id.ne.this%p(i2)%id) then
+                         ! Compute the gradient
+                         buf=gradW(d12,delta,p1%pos,p2%pos)
+                         dWdx(1) = sum(L(1,:)*buf)
+                         dWdx(2) = sum(L(2,:)*buf)
+                         dWdx(3) = sum(L(3,:)*buf)
+                         driftsum=driftsum+dWdx*(usj-this%p(i)%us)**2
+                      end if
+                  end do
+               end do
+            end do
 
          call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
 
@@ -1070,6 +1123,25 @@ contains
         if (verbose.gt.0) call log(message)
      end if
    end block logging
+
+ contains
+
+   ! Gradient of the smoothing kernel (not normalized)
+  function gradW(d,h,x1,x2)
+    implicit none
+    real(WP), dimension(3), intent(in) :: x1,x2
+    real(WP), intent(in) :: d,h
+    real(WP), dimension(3) :: gradW
+    real(WP) :: q,dWdr
+    q = d/h
+    dWdr = 0.0_WP
+    if (q.ge.0.0_WP .and. q.lt.1.0_WP) then
+       dWdr = -0.75_WP/h*(4.0_WP*q-3.0_WP*q**2)
+    elseif (q.ge.1.0_WP .and. q.lt.2.0_WP) then
+       dWdr = -0.75_WP/h*(2.0_WP-q)**2
+    end if
+    gradW = dWdr*(x1-x2)/d
+  end function gradW
    
  end subroutine advance_scrw_tracer
 
@@ -1081,7 +1153,7 @@ contains
    real(WP), intent(inout) :: rho_ij
    real(WP) :: Rc, sig
 
-   Rc=0.04_WP
+   Rc=0.1_WP
    sig = 2.0_WP*0.17_WP**2
    select case(this%corr_type)
    case(1)
@@ -1783,9 +1855,9 @@ contains
           myp%Us(3) = (-dot_product(myp%Us(:),guz) + tau(3))*mydt + (1.0_WP - a*mydt)*myp%Us(3) + b*myp%dW(3)*rmydt
 
           ! Get RMS at step (n) and (n+1)
-          call get_tke(pold, rho, sgs_visc, tke)
+          call this%get_tke(p=pold, rho=rho, sgs_visc=sgs_visc, tke=tke)
           rms_old = sqrt(2.0_WP / 3.0_WP * tke)
-          call get_tke(myp , rho, sgs_visc, tke)
+          call this%get_tke(p=myp , rho=rho, sgs_visc=sgs_visc, tke=tke)
           rms_new = sqrt(2.0_WP / 3.0_WP * tke)
 
           ! Normalize then scale with RMS at new location
@@ -2361,10 +2433,16 @@ contains
       if (present(nover)) then
          no=nover
          if (no.gt.this%cfg%no) then
-            call warn('[rand_walk_class share] Specified overlap is larger than that of cfg - reducing no')
+            call die('[rand_walk_class share] Specified overlap is larger than that of cfg - reducing no')
             no=this%cfg%no
          else if (no.le.0) then
             call die('[rand_walk_class share] Specified overlap cannot be less or equal to zero')
+         else if (this%cfg%nx.gt.1.and.no.gt.this%cfg%nx_) then
+            call die('[rand_walk_class share] Specified overlap spans multiple procs in x')
+         else if (this%cfg%ny.gt.1.and.no.gt.this%cfg%ny_) then
+            call die('[rand_walk_class share] Specified overlap spans multiple procs in y')
+         else if (this%cfg%nz.gt.1.and.no.gt.this%cfg%nz_) then
+            call die('[rand_walk_class share] Specified overlap spans multiple procs in z')
          end if
       else
          no=1

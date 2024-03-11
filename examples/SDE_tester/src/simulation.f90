@@ -323,7 +323,7 @@ contains
          !> ADVANCE PARTICLES
          wt_lpt%time_in=parallel_time()
          resU=fs%rho; resV=fs%visc-sgs%visc
-         call lp%advance_scrw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
+         call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          !> COMPUTE STATS
