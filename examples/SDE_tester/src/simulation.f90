@@ -173,7 +173,7 @@ contains
       initialize_lpt: block
          use random, only: random_uniform, random_normal
          integer :: i,np
-         real(WP) :: dp
+         real(WP) :: dp,init_rms
          character(len=str_medium) :: timestamp
          ! Create solver
          lp=lpt(cfg=cfg,name='CRW')
@@ -185,6 +185,8 @@ contains
          call param_read('Number of particles',np)
          ! Check if spatially correlated
          call param_read('Correlation function', lp%corr_type)
+         init_rms = (0.005_WP / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
+         init_rms = sqrt(2.0_WP / 3.0_WP * init_rms)
          ! Check if a particles should be read in
          ! Root process initializes np particles randomly
          if (lp%cfg%amRoot) then
@@ -201,7 +203,9 @@ contains
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
                ! OU
-               lp%p(i)%us=0.0_WP
+               lp%p(i)%us=[random_normal(m=0.0_WP,sd=init_rms),&
+               &           random_normal(m=0.0_WP,sd=init_rms),&
+               &           random_normal(m=0.0_WP,sd=init_rms)]
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh

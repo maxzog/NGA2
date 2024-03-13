@@ -849,7 +849,7 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(3) :: b_ij,driftsum,usj
-   integer :: i,ierr,no,i2,ii,jj,kk,nn
+   integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
    integer, dimension(:,:,:), allocatable :: npic
    integer, dimension(:,:,:,:), allocatable :: ipic
    real(WP) :: rmydt,mydt,dt_done
@@ -913,7 +913,7 @@ contains
    end block pic_prep
    
    ! Advance the equations
-   delta=0.5_WP*this%cfg%min_meshsize
+   delta=0.5_WP * this%cfg%min_meshsize
    do i=1,this%np_
       ! Avoid particles with id=0
       if (this%p(i)%id.eq.0) cycle
@@ -927,20 +927,41 @@ contains
          rmydt=sqrt(mydt)
          ! Remember the particle
          pold=this%p(i)
+         p1=this%p(i)
          ! Advance with Euler prediction
          !call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
-         this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
-         this%p(i)%pos=pold%pos + 0.5_WP*mydt*(this%p(i)%vel + this%p(i)%us)
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos + 0.5_WP*mydt*(p1%vel + p1%us)
 
          ! Store particle data
-         r1=this%p(i)%pos
+         r1=p1%pos
 
          ! Correlate diffusion
          b_ij    = 0.0_WP
          corrsum = 0.0_WP
-         do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
-            do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
-               do ii=this%p(i)%ind(1)-no+1,this%p(i)%ind(1)+no-1
+         L       = 0.0_WP
+         counter = 0
+
+         ! Get mean Lagrangian velocity in cell
+         driftsum=0.0_WP
+         ii=p1%ind(1)
+         jj=p1%ind(2)
+         kk=p1%ind(3)
+         do nn=1,npic(ii,jj,kk)
+            i2=ipic(nn,ii,jj,kk)
+            if (i2.gt.0) then
+               p2=this%p(i2)
+            else
+               i2=-i2
+               p2=this%g(i2)
+            end if
+            driftsum=driftsum+p2%us
+         end do
+         driftsum=driftsum/npic(ii,jj,kk)
+
+         do kk=p1%ind(3)-no,p1%ind(3)+no
+            do jj=p1%ind(2)-no,p1%ind(2)+no
+               do ii=p1%ind(1)-no,p1%ind(1)+no
                   ! Loop over particles in that cell
                   do nn=1,npic(ii,jj,kk)  
                      ! Get index of neighbor particle
@@ -980,96 +1001,109 @@ contains
             end do
          end do
 
-!!         ! Correlate drift
-!!         do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
-!!            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
-!!               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
-!!                  ! Loop over particles in that cell
-!!                  do nn=1,npic(ii,jj,kk)  
-!!                     ! Get index of neighbor particle
-!!                     i2=ipic(nn,ii,jj,kk)
-!!
-!!                     ! Get relevant data from correct storage
-!!                     if (i2.gt.0) then
-!!                        r2=this%p(i2)%pos
-!!                     else if (i2.lt.0) then
-!!                        i2=-i2
-!!                        r2=this%g(i2)%pos
-!!                     end if
-!!
-!!                     ! Compute relative information
-!!                     r12 = r1-r2
-!!                     d12  = norm2(r12)
-!!                      if (this%p(i)%id.ne.this%p(i2)%id) then
-!!                           dWdx = gradW(d12,delta,p1%pos,p2%pos)
-!!                           L(1,1) = L(1,1) + (p2%pos(1)-p1%pos(1))*dWdx(1)
-!!                           L(1,2) = L(1,2) + (p2%pos(1)-p1%pos(1))*dWdx(2)
-!!                           L(1,3) = L(1,3) + (p2%pos(1)-p1%pos(1))*dWdx(3)
-!!                           L(2,1) = L(2,1) + (p2%pos(2)-p1%pos(2))*dWdx(1)
-!!                           L(2,2) = L(2,2) + (p2%pos(2)-p1%pos(2))*dWdx(2)
-!!                           L(2,3) = L(2,3) + (p2%pos(2)-p1%pos(2))*dWdx(3)
-!!                           L(3,1) = L(3,1) + (p2%pos(3)-p1%pos(3))*dWdx(1)
-!!                           L(3,2) = L(3,2) + (p2%pos(3)-p1%pos(3))*dWdx(2)
-!!                           L(3,3) = L(3,3) + (p2%pos(3)-p1%pos(3))*dWdx(3)
-!!                        end if
-!!                  end do
-!!               end do
-!!            end do
-!!         end do
-!!         ! Invert L matrix for gradient correction
-!!         call inverse_matrix(L,Linv,3)
-!!
-!!         driftsum=0.0_WP
-!!         do kk=this%p(i)%ind(3)-1,this%p(i)%ind(3)+1
-!!            do jj=this%p(i)%ind(2)-1,this%p(i)%ind(2)+1
-!!               do ii=this%p(i)%ind(1)-1,this%p(i)%ind(1)+1
-!!                  ! Loop over particles in that cell
-!!                  do nn=1,npic(ii,jj,kk)  
-!!                     ! Get index of neighbor particle
-!!                     i2=ipic(nn,ii,jj,kk)
-!!
-!!                     ! Get relevant data from correct storage
-!!                     if (i2.gt.0) then
-!!                        r2=this%p(i2)%pos
-!!                        usj=this%p(i2)%us
-!!                     else if (i2.lt.0) then
-!!                        i2=-i2
-!!                        r2=this%g(i2)%pos
-!!                        usj=this%g(i2)%us
-!!                     end if
-!!
-!!                     ! Compute relative information
-!!                     r12 = r1-r2
-!!                     d12  = norm2(r12)
-!!                      if (this%p(i)%id.ne.this%p(i2)%id) then
-!!                         ! Compute the gradient
-!!                         buf=gradW(d12,delta,p1%pos,p2%pos)
-!!                         dWdx(1) = sum(L(1,:)*buf)
-!!                         dWdx(2) = sum(L(2,:)*buf)
-!!                         dWdx(3) = sum(L(3,:)*buf)
-!!                         driftsum=driftsum+dWdx*(usj-this%p(i)%us)**2
-!!                      end if
-!!                  end do
-!!               end do
-!!            end do
-!!         end do
+         ! ! print *, "BEFORE DRIFT"
+         ! ! Correlate drift
+         ! do kk=p1%ind(3)-no,p1%ind(3)+no
+         !    do jj=p1%ind(2)-no,p1%ind(2)+no
+         !       do ii=p1%ind(1)-no,p1%ind(1)+no
+         !          ! Loop over particles in that cell
+         !          do nn=1,npic(ii,jj,kk)  
+         !             ! Get index of neighbor particle
+         !             i2=ipic(nn,ii,jj,kk)
+         !
+         !             ! Get relevant data from correct storage
+         !             if (i2.gt.0) then
+         !                p2=this%p(i2)
+         !                r2=p2%pos
+         !             else if (i2.lt.0) then
+         !                i2=-i2
+         !                p2=this%g(i2)
+         !                r2=p2%pos
+         !             end if
+         !
+         !             ! Compute relative information
+         !             r12 = r1-r2
+         !             d12  = norm2(r12)
+         !              if (p1%id.ne.p2%id) then
+         !                   dWdx = gradW(d12,delta,p1%pos,p2%pos)
+         !                   L(1,1) = L(1,1) + (p2%pos(1)-p1%pos(1))*dWdx(1)
+         !                   L(1,2) = L(1,2) + (p2%pos(1)-p1%pos(1))*dWdx(2)
+         !                   L(1,3) = L(1,3) + (p2%pos(1)-p1%pos(1))*dWdx(3)
+         !                   L(2,1) = L(2,1) + (p2%pos(2)-p1%pos(2))*dWdx(1)
+         !                   L(2,2) = L(2,2) + (p2%pos(2)-p1%pos(2))*dWdx(2)
+         !                   L(2,3) = L(2,3) + (p2%pos(2)-p1%pos(2))*dWdx(3)
+         !                   L(3,1) = L(3,1) + (p2%pos(3)-p1%pos(3))*dWdx(1)
+         !                   L(3,2) = L(3,2) + (p2%pos(3)-p1%pos(3))*dWdx(2)
+         !                   L(3,3) = L(3,3) + (p2%pos(3)-p1%pos(3))*dWdx(3)
+         !                   counter= counter + 1
+         !                end if
+         !          end do
+         !       end do
+         !    end do
+         ! end do
+         ! print *, "MADE IT BEFORE INVERSE"
+         ! if (counter.eq.0) then
+         !    L=0.0_WP
+         !    L(1,1) = 1.0_WP
+         !    L(2,2) = 1.0_WP
+         !    L(3,3) = 1.0_WP
+         ! end if
+         ! print *, "COUNTER :: ", counter
+         ! ! Invert L matrix for gradient correction
+         ! call inverse_matrix(L,Linv,3)
+         ! ! print *, "MADE IT AFTER INVERSE"
+         !
+         ! driftsum=0.0_WP
+         ! do kk=p1%ind(3)-no,p1%ind(3)+no
+         !    do jj=p1%ind(2)-no,p1%ind(2)+no
+         !       do ii=p1%ind(1)-no,p1%ind(1)+no
+         !          ! Loop over particles in that cell
+         !          do nn=1,npic(ii,jj,kk)  
+         !             ! Get index of neighbor particle
+         !             i2=ipic(nn,ii,jj,kk)
+         !
+         !             ! Get relevant data from correct storage
+         !             if (i2.gt.0) then
+         !                p2=this%p(i2)
+         !                r2=p2%pos
+         !             else if (i2.lt.0) then
+         !                i2=-i2
+         !                p2=this%g(i2)
+         !                r2=p2%pos
+         !             end if
+         !
+         !             ! Compute relative information
+         !             r12 = r1-r2
+         !             d12 = norm2(r12)
+         !              if (p1%id.ne.p2%id) then
+         !                 ! Compute the gradient
+         !                 buf=gradW(d12,delta,p1%pos,p2%pos)
+         !                 dWdx(1) = sum(L(1,:)*buf)
+         !                 dWdx(2) = sum(L(2,:)*buf)
+         !                 dWdx(3) = sum(L(3,:)*buf)
+         !                 driftsum=driftsum+dWdx*(dot_product(p2%us,r12/d12)-dot_product(p1%us,r12/d12))**2
+         !              end if
+         !          end do
+         !       end do
+         !    end do
+         ! end do
 
-         call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
+         call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
 
-         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum)! - a*driftsum(1)*mydt
-         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum)! - a*driftsum(2)*mydt
-         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum)! - a*driftsum(3)*mydt
+         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b_ij(1)/sqrt(corrsum) - driftsum(1)!*mydt
+         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b_ij(2)/sqrt(corrsum) - driftsum(2)!*mydt
+         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b_ij(3)/sqrt(corrsum) - driftsum(3)!*mydt
 
-         this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
-         this%p(i)%pos=pold%pos + mydt*(this%p(i)%vel + this%p(i)%us)
-
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos + mydt*(p1%vel + p1%us)
+         !p1%pos=pold%pos
          ! Stochastic update
-         this%p(i)%us(1) = tmp1
-         this%p(i)%us(2) = tmp2
-         this%p(i)%us(3) = tmp3
+         p1%us(1) = tmp1
+         p1%us(2) = tmp2
+         p1%us(3) = tmp3
 
          ! Relocalize
-         this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
          ! Increment
          dt_done=dt_done+mydt
 
@@ -1078,27 +1112,29 @@ contains
            use mathtools, only: Pi,normalize
            real(WP) :: d12
            real(WP), dimension(3) :: n12,Un
-           if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
-              d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
-              n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+           if (this%cfg%VF(p1%ind(1),p1%ind(2),p1%ind(3)).le.0.0_WP) then
+              d12=this%cfg%get_scalar(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),S=this%Wdist,bc='d')
+              n12=this%Wnorm(:,p1%ind(1),p1%ind(2),p1%ind(3))
               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
-              this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
-              Un=sum(this%p(i)%vel*n12)*n12
-              this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+              p1%pos=p1%pos-2.0_WP*d12*n12
+              Un=sum(p1%vel*n12)*n12
+              p1%vel=p1%vel-2.0_WP*Un
            end if
          end block wall_col
          ! Correct the position to take into account periodicity
-         if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
-         if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
-         if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+         if (this%cfg%xper) p1%pos(1)=this%cfg%x(this%cfg%imin)+modulo(p1%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+         if (this%cfg%yper) p1%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(p1%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+         if (this%cfg%zper) p1%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(p1%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
          ! Handle particles that have left the domain
-         if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
-         if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
-         if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
+         if (p1%pos(1).lt.this%cfg%x(this%cfg%imin).or.p1%pos(1).gt.this%cfg%x(this%cfg%imax+1)) p1%flag=1
+         if (p1%pos(2).lt.this%cfg%y(this%cfg%jmin).or.p1%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) p1%flag=1
+         if (p1%pos(3).lt.this%cfg%z(this%cfg%kmin).or.p1%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) p1%flag=1
          ! Relocalize the particle
-         this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
+         ! Copy back to the particle
+         this%p(i)=p1
          ! Count number of particles removed
-         if (this%p(i)%flag.eq.1) this%np_out=this%np_out+1
+         if (p1%flag.eq.1) this%np_out=this%np_out+1
       end do
    end do
 
@@ -1142,7 +1178,7 @@ contains
     elseif (q.ge.1.0_WP .and. q.lt.2.0_WP) then
        dWdr = -0.75_WP/h*(2.0_WP-q)**2
     end if
-    gradW = dWdr*(x1-x2)/d
+    gradW = dWdr*(x2-x1)/d
   end function gradW
    
  end subroutine advance_scrw_tracer
@@ -2435,16 +2471,16 @@ contains
       if (present(nover)) then
          no=nover
          if (no.gt.this%cfg%no) then
-            call die('[rand_walk_class share] Specified overlap is larger than that of cfg - reducing no')
+            call die('[randomwalk_class share] Specified overlap is larger than that of cfg - reducing no')
             no=this%cfg%no
          else if (no.le.0) then
-            call die('[rand_walk_class share] Specified overlap cannot be less or equal to zero')
+            call die('[randomwalk_class share] Specified overlap cannot be less or equal to zero')
          else if (this%cfg%nx.gt.1.and.no.gt.this%cfg%nx_) then
-            call die('[rand_walk_class share] Specified overlap spans multiple procs in x')
+            call die('[randomwalk_class share] Specified overlap spans multiple procs in x')
          else if (this%cfg%ny.gt.1.and.no.gt.this%cfg%ny_) then
-            call die('[rand_walk_class share] Specified overlap spans multiple procs in y')
+            call die('[randomwalk_class share] Specified overlap spans multiple procs in y')
          else if (this%cfg%nz.gt.1.and.no.gt.this%cfg%nz_) then
-            call die('[rand_walk_class share] Specified overlap spans multiple procs in z')
+            call die('[randomwalk_class share] Specified overlap spans multiple procs in z')
          end if
       else
          no=1
