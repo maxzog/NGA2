@@ -852,7 +852,7 @@ contains
    integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
    integer, dimension(:,:,:), allocatable :: npic
    integer, dimension(:,:,:,:), allocatable :: ipic
-   real(WP) :: rmydt,mydt,dt_done
+   real(WP) :: rmydt,mydt,dt_done,sumW,unorm
    real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
    real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf
    real(WP), dimension(3,3) :: L,Linv
@@ -943,21 +943,20 @@ contains
          counter = 0
 
          ! Get mean Lagrangian velocity in cell
-         driftsum=0.0_WP
-         ii=p1%ind(1)
-         jj=p1%ind(2)
-         kk=p1%ind(3)
-         do nn=1,npic(ii,jj,kk)
-            i2=ipic(nn,ii,jj,kk)
-            if (i2.gt.0) then
-               p2=this%p(i2)
-            else
-               i2=-i2
-               p2=this%g(i2)
-            end if
-            driftsum=driftsum+p2%us
-         end do
-         driftsum=driftsum/npic(ii,jj,kk)
+         ! ii=p1%ind(1)
+         ! jj=p1%ind(2)
+         ! kk=p1%ind(3)
+         ! do nn=1,npic(ii,jj,kk)
+         !    i2=ipic(nn,ii,jj,kk)
+         !    if (i2.gt.0) then
+         !       p2=this%p(i2)
+         !    else
+         !       i2=-i2
+         !       p2=this%g(i2)
+         !    end if
+         !    driftsum=driftsum+p2%us
+         ! end do
+         ! driftsum=driftsum/npic(ii,jj,kk)
 
          do kk=p1%ind(3)-no,p1%ind(3)+no
             do jj=p1%ind(2)-no,p1%ind(2)+no
@@ -1001,7 +1000,6 @@ contains
             end do
          end do
 
-         ! ! print *, "BEFORE DRIFT"
          ! ! Correlate drift
          ! do kk=p1%ind(3)-no,p1%ind(3)+no
          !    do jj=p1%ind(2)-no,p1%ind(2)+no
@@ -1052,47 +1050,52 @@ contains
          ! ! Invert L matrix for gradient correction
          ! call inverse_matrix(L,Linv,3)
          ! ! print *, "MADE IT AFTER INVERSE"
-         !
-         ! driftsum=0.0_WP
-         ! do kk=p1%ind(3)-no,p1%ind(3)+no
-         !    do jj=p1%ind(2)-no,p1%ind(2)+no
-         !       do ii=p1%ind(1)-no,p1%ind(1)+no
-         !          ! Loop over particles in that cell
-         !          do nn=1,npic(ii,jj,kk)  
-         !             ! Get index of neighbor particle
-         !             i2=ipic(nn,ii,jj,kk)
-         !
-         !             ! Get relevant data from correct storage
-         !             if (i2.gt.0) then
-         !                p2=this%p(i2)
-         !                r2=p2%pos
-         !             else if (i2.lt.0) then
-         !                i2=-i2
-         !                p2=this%g(i2)
-         !                r2=p2%pos
-         !             end if
-         !
-         !             ! Compute relative information
-         !             r12 = r1-r2
-         !             d12 = norm2(r12)
-         !              if (p1%id.ne.p2%id) then
-         !                 ! Compute the gradient
-         !                 buf=gradW(d12,delta,p1%pos,p2%pos)
-         !                 dWdx(1) = sum(L(1,:)*buf)
-         !                 dWdx(2) = sum(L(2,:)*buf)
-         !                 dWdx(3) = sum(L(3,:)*buf)
-         !                 driftsum=driftsum+dWdx*(dot_product(p2%us,r12/d12)-dot_product(p1%us,r12/d12))**2
-         !              end if
-         !          end do
-         !       end do
-         !    end do
-         ! end do
 
+         driftsum=0.0_WP
+         sumW=epsilon(1.0_WP)
+         do kk=p1%ind(3)-no,p1%ind(3)+no
+            do jj=p1%ind(2)-no,p1%ind(2)+no
+               do ii=p1%ind(1)-no,p1%ind(1)+no
+                  ! Loop over particles in that cell
+                  do nn=1,npic(ii,jj,kk)  
+                     ! Get index of neighbor particle
+                     i2=ipic(nn,ii,jj,kk)
+
+                     ! Get relevant data from correct storage
+                     if (i2.gt.0) then
+                        p2=this%p(i2)
+                        r2=p2%pos
+                     else if (i2.lt.0) then
+                        i2=-i2
+                        p2=this%g(i2)
+                        r2=p2%pos
+                     end if
+
+                     ! Compute relative information
+                     r12 = r1-r2
+                     d12 = norm2(r12)
+                      if (p1%id.ne.p2%id) then
+                         ! Compute the gradient
+                         sumW=sumW+kernel(d12,delta)
+                         dWdx=gradW(d12,delta,p1%pos,p2%pos)
+                         ! dWdx(1) = sum(L(1,:)*buf)
+                         ! dWdx(2) = sum(L(2,:)*buf)
+                         ! dWdx(3) = sum(L(3,:)*buf)
+                         ! driftsum=driftsum+dWdx*(dot_product(p2%us,r12/d12)-dot_product(p1%us,r12/d12))**2
+                         unorm=sum((p2%us-p1%us)*r12)/d12
+                         driftsum=driftsum-dWdx*(unorm*r12/d12)**2
+                      end if
+                  end do
+               end do
+            end do
+         end do
+         driftsum=0.0_WP
+         
          call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
 
-         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b_ij(1)/sqrt(corrsum) - driftsum(1)!*mydt
-         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b_ij(2)/sqrt(corrsum) - driftsum(2)!*mydt
-         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b_ij(3)/sqrt(corrsum) - driftsum(3)!*mydt
+         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b_ij(1)/sqrt(corrsum) - driftsum(1)/sumW!*mydt
+         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b_ij(2)/sqrt(corrsum) - driftsum(2)/sumW!*mydt
+         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b_ij(3)/sqrt(corrsum) - driftsum(3)/sumW!*mydt
 
          p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
          p1%pos=pold%pos + mydt*(p1%vel + p1%us)
@@ -1163,6 +1166,20 @@ contains
    end block logging
 
  contains
+
+  function kernel(d,h)
+    implicit none
+    real(WP), intent(in) :: d,h
+    real(WP) :: kernel
+    real(WP) :: q
+    q=d/h
+    kernel = 0.0_WP
+    if (q.ge.0.0_WP .and. q.lt.1.0_WP) then
+       kernel = 1.0_WP-1.5_WP*q**2+0.75_WP*q**3
+    elseif (q.ge.1.0_WP .and. q.lt.2.0_WP) then
+       kernel = 0.25_WP*(2.0_WP-q)**3
+    end if
+  end function kernel
 
    ! Gradient of the smoothing kernel (not normalized)
   function gradW(d,h,x1,x2)
