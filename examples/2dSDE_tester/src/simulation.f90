@@ -140,14 +140,9 @@ contains
 
       ! Create an LES model
       create_sgs: block
-         real(WP) :: tmptke=0.0_WP
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
-         sgs%visc=0.005_WP
-         call param_read('Steady-state TKE', tmptke, default=0.0_WP)
-         if (tmptke.gt.0.0_WP) then
-            sgs%visc=fs%rho*fs%cfg%min_meshsize*0.067_WP*sqrt(tmptke)
-         end if
+         sgs%visc=0.0025_WP
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -180,6 +175,7 @@ contains
          integer :: i,np,j
          real(WP) :: dp,init_rms
          character(len=str_medium) :: timestamp
+         real(WP), dimension(:,:), allocatable :: arr
          ! Create solver
          lp=lpt(cfg=cfg,name='CRW')
          ! Get particle density from the input
@@ -188,29 +184,38 @@ contains
          call param_read('Particle diameter', dp)
          ! Get number of particles
          call param_read('Number of particles',np)
+         allocate(arr(2, 1:np**2)); arr=0.0_WP
+         do i = 1, np
+            do j = 1, np
+               arr(1, i + np*(j - 1)) = fs%cfg%xL / np * i - 0.5_WP*fs%cfg%xL / np
+               arr(2, i + np*(j - 1)) = fs%cfg%xL / np * j - 0.5_WP*fs%cfg%xL / np
+            end do
+         end do
          ! Check if spatially correlated
          call param_read('Correlation function', lp%corr_type)
-         init_rms = (maxval(sgs%visc) / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
+         init_rms = (0.005_WP / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
          init_rms = sqrt(2.0_WP / 3.0_WP * init_rms)
          ! Check if a particles should be read in
          ! Root process initializes np particles randomly
          if (lp%cfg%amRoot) then
-            call lp%resize(np)
-            do i=1,np
+            call lp%resize(np*np)
+            do i=1,np**2
                ! Give id
                lp%p(i)%id=int(i,8)
                ! Set the diameter
                lp%p(i)%d=dp
                ! Assign random position in the domain
-               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
-               &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
-               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+!!               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
+!!               &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
+!!               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
+               lp%p(i)%pos=[arr(1,i), arr(2,i), 0.0_WP]
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
                ! OU
                lp%p(i)%us=[random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms)]
+               lp%p(i)%us(3)=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
@@ -221,6 +226,7 @@ contains
                lp%p(i)%flag=0
             end do
          end if
+         deallocate(arr)
          call lp%sync()
       end block initialize_lpt
       
@@ -234,7 +240,7 @@ contains
          pmesh%vecname(1)="vel"
          pmesh%vecname(2)="fld"
          pmesh%vecname(3)="uf"
-         call lp%resize(np)
+         call lp%resize(np**2)
          call lp%update_partmesh(pmesh)
          do i = 1,lp%np_
             pmesh%var(1,i) = lp%p(i)%id
@@ -334,6 +340,12 @@ contains
          resU=fs%rho; resV=fs%visc-sgs%visc
          call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
+
+         do ii=1,lp%np_
+            lp%p(ii)%pos(3)=0.0_WP
+            lp%p(ii)%vel(3)=0.0_WP
+            lp%p(ii)%us(3) =0.0_WP
+         end do
          
          !> COMPUTE STATS
          wt_stat%time_in=parallel_time()

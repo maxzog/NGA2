@@ -24,7 +24,7 @@ contains
       create_grid: block
          use sgrid_class, only: cartesian
          integer :: i,nx
-         real(WP) :: Lx
+         real(WP) :: Lx, dz
          real(WP), dimension(:), allocatable :: x
          ! Read in grid definition
          call param_read('Lx',Lx)
@@ -34,8 +34,9 @@ contains
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx
          end do
+         dz = 0.5_WP * Lx / nx
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=5,x=x,y=x,z=x,xper=.true.,yper=.true.,zper=.true.,name='SDE')
+         grid=sgrid(coord=cartesian,no=4,x=x,y=x,z=[-dz, dz],xper=.true.,yper=.true.,zper=.true.,name='SDE')
       end block create_grid
       
       ! Create a config from that grid on our entire group

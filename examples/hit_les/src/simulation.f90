@@ -192,13 +192,16 @@ contains
            df=datafile(pg=cfg,fdata='restart/data_'//trim(adjustl(timestamp)))
         else
            ! If we are not restarting, we will still need a datafile for saving restart files
-           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=4)
+           df=datafile(pg=cfg,filename=trim(cfg%name),nval=2,nvar=7)
            df%valname(1)='t'
            df%valname(2)='dt'
            df%varname(1)='U'
            df%varname(2)='V'
            df%varname(3)='W'
            df%varname(4)='P'
+           df%varname(5)='LM'
+           df%varname(6)='MM'
+           df%varname(7)='visc'
         end if
       end block restart_and_save
 
@@ -248,6 +251,11 @@ contains
          if (use_sgs) call param_read('SGS model type',sgs_type)
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
+         if (restarted) then
+            call df%pullvar(name='LM'  ,var=sgs%LM)
+            call df%pullvar(name='MM'  ,var=sgs%MM)
+            call df%pullvar(name='visc',var=sgs%visc)
+         end if
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -327,9 +335,16 @@ contains
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
-
-         ! Compute turbulence stats
-         call compute_stats()
+         Re_L       = 0.0_WP
+         Re_lambda  = 0.0_WP
+         meanvisc   = 0.0_WP 
+         eta        = 0.0_WP
+         sgsTKE     = 0.0_WP
+         TKE        = 0.0_WP
+         URMS       = 0.0_WP
+         EPS        = 0.0_WP
+         EPSp       = 0.0_WP
+         ell        = 0.0_WP
       end block initialize_velocity
       
       ! Initialize LPT solver
@@ -348,7 +363,7 @@ contains
          ! Get number of particles
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
-         if (restarted) then
+         if (.false.) then
             call param_read('Restart from',timestamp,'r')
             ! Read the part file
             call lp%read(filename='restart/part_'//trim(adjustl(timestamp)))
@@ -382,6 +397,8 @@ contains
             ! Distribute particles
             call lp%sync()
          end if
+         ! Compute turbulence stats
+         call compute_stats()
       end block initialize_lpt
       
 
@@ -505,8 +522,8 @@ contains
          call sgsfile%add_column(time%t,'Time')
          call sgsfile%add_column(sgs%min_visc,'Min eddy visc')
          call sgsfile%add_column(sgs%max_visc,'Max eddy visc')
-         call sgsfile%add_column(sgsEPSp,'sgsEPS')
-         call sgsfile%add_column(sgsTKE,'sgsTKE')
+!         call sgsfile%add_column(sgsEPSp,'sgsEPS')
+!         call sgsfile%add_column(sgsTKE,'sgsTKE')
          call sgsfile%write()
          ! Create timing monitor
          tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
@@ -556,8 +573,8 @@ contains
          wt_lpt%time_in=parallel_time()
          ! Advance particles by dt
          resU=fs%rho; resV=fs%visc
-         ! call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
          call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
+         ! call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          ! Remember old velocity

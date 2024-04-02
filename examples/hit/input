@@ -1,9 +1,9 @@
 # Parallelization
-Partition :	1 1 4
+Partition :	1 5 6
 
 # Mesh definition
 Lx :	6.2832
-nx :	64
+nx :	128
 
 # Fluid properties
 Dynamic viscosity :    0.01
@@ -20,19 +20,21 @@ Force to maximum Re_lambda : .true.
 
 # Particle properties
 Particle density :     1000
-Particle Stokes number :    1.0
-Number of particles :  10000 #10000 # 250000
+Particle Stokes number :    0.0
+Number of particles :  1500000 #10000 # 250000
 Use CRW :              .false.
+
+Use SGS model : .false.
 
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
-Max iter :          12500
+Max iter :          2500
 
 # Ensight output
-Ensight output period : 1.0
+Ensight output period : 0.1254
 
 # Restart config
-Restart sim : .false.
-# Restart from : 1.00044E-02
-Restart output period : 1.0
+Restart sim : .true.
+Restart from : 1.20010E+01
+Restart output period : 0.5
