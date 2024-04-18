@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use hypre_str_class,   only: hypre_str
+!   use hypre_str_class,   only: hypre_str
    use incomp_class,      only: incomp
    use randomwalk_class,  only: lpt
    use timetracker_class, only: timetracker
@@ -17,7 +17,7 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   type(hypre_str),   public :: ps
+!   type(hypre_str),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
@@ -126,7 +126,7 @@ contains
 
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pfmg
+!         use hypre_str_class, only: pfmg
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Assign constant viscosity
@@ -134,8 +134,8 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pfmg,nst=7)
-         call fs%setup(pressure_solver=ps)
+!         ps=hypre_str(cfg=cfg,name='Pressure',method=pfmg,nst=7)
+!         call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
 
       ! Create an LES model

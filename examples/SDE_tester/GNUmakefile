@@ -1,11 +1,11 @@
 # NGA location if not yet defined
-# NGA_HOME ?= ../.. 
+NGA_HOME ?= /home/maxzog/NGA2_new/
 
 # Compilation parameters
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_FFTW  = TRUE
-USE_HYPRE = TRUE
+USE_HYPRE = FALSE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE 
@@ -27,6 +27,9 @@ VPATH_LOCATIONS   += $(Ulocs)
 # LAPACK_DIR= /usr/lapack/#/usr/local/Cellar/lapack/3.11
 # HYPRE_DIR = /opt/libs/hypre/#/Users/maxzog/builds/hypre/src/hypre
 # FFTW_DIR  = /opt/libs/fftw3/#/usr/local/Cellar/fftw/3.3.10_1
+LAPACK_DIR=/usr/lapack/
+HYPRE_DIR =/usr/hypre/
+FFTW_DIR  =/home/maxzog/fftw/
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs

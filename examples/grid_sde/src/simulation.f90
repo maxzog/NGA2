@@ -21,6 +21,7 @@ module simulation
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
+   type(lpt),         public :: sde
    type(sgsmodel),    public :: sgs
    
    !> Ensight postprocessing
@@ -34,7 +35,7 @@ module simulation
    logical :: restarted
    
    !> Simulation monitor file
-   type(monitor) :: mfile,hitfile,lptfile,sgsfile,tfile,ssfile
+   type(monitor) :: mfile,hitfile,lptfile,sgsfile,tfile,ssfile,sdefile
 
    public :: simulation_init,simulation_run,simulation_final
    
@@ -140,9 +141,14 @@ contains
 
       ! Create an LES model
       create_sgs: block
+         real(WP) :: tmptke=0.0_WP
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
-         sgs%visc=0.0025_WP
+         sgs%visc=0.005_WP
+         call param_read('Steady-state TKE', tmptke, default=0.0_WP)
+         if (tmptke.gt.0.0_WP) then
+            sgs%visc=fs%rho*fs%cfg%min_meshsize*0.067_WP*sqrt(tmptke)
+         end if
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -175,7 +181,6 @@ contains
          integer :: i,np,j
          real(WP) :: dp,init_rms
          character(len=str_medium) :: timestamp
-         real(WP), dimension(:,:), allocatable :: arr
          ! Create solver
          lp=lpt(cfg=cfg,name='CRW')
          ! Get particle density from the input
@@ -184,38 +189,29 @@ contains
          call param_read('Particle diameter', dp)
          ! Get number of particles
          call param_read('Number of particles',np)
-         allocate(arr(2, 1:np**2)); arr=0.0_WP
-         do i = 1, np
-            do j = 1, np
-               arr(1, i + np*(j - 1)) = fs%cfg%xL / np * i - 0.5_WP*fs%cfg%xL / np
-               arr(2, i + np*(j - 1)) = fs%cfg%xL / np * j - 0.5_WP*fs%cfg%xL / np
-            end do
-         end do
          ! Check if spatially correlated
          call param_read('Correlation function', lp%corr_type)
-         init_rms = (0.0025_WP / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
+         init_rms = (maxval(sgs%visc) / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
          init_rms = sqrt(2.0_WP / 3.0_WP * init_rms)
          ! Check if a particles should be read in
          ! Root process initializes np particles randomly
          if (lp%cfg%amRoot) then
-            call lp%resize(np*np)
-            do i=1,np**2
+            call lp%resize(np)
+            do i=1,np
                ! Give id
                lp%p(i)%id=int(i,8)
                ! Set the diameter
                lp%p(i)%d=dp
                ! Assign random position in the domain
-!!               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
-!!               &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
-!!               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
-               lp%p(i)%pos=[arr(1,i), arr(2,i), 0.0_WP]
+               lp%p(i)%pos=[random_uniform(lp%cfg%x(lp%cfg%imin),lp%cfg%x(lp%cfg%imax+1)),&
+               &            random_uniform(lp%cfg%y(lp%cfg%jmin),lp%cfg%y(lp%cfg%jmax+1)),&
+               &            random_uniform(lp%cfg%z(lp%cfg%kmin),lp%cfg%z(lp%cfg%kmax+1))]
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
                ! OU
                lp%p(i)%us=[random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms)]
-               lp%p(i)%us(3)=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
@@ -226,7 +222,6 @@ contains
                lp%p(i)%flag=0
             end do
          end if
-         deallocate(arr)
          call lp%sync()
       end block initialize_lpt
       
@@ -240,7 +235,7 @@ contains
          pmesh%vecname(1)="vel"
          pmesh%vecname(2)="fld"
          pmesh%vecname(3)="uf"
-         call lp%resize(np**2)
+         call lp%resize(np)
          call lp%update_partmesh(pmesh)
          do i = 1,lp%np_
             pmesh%var(1,i) = lp%p(i)%id
@@ -249,6 +244,59 @@ contains
             pmesh%vec(:,3,i) = lp%p(i)%us 
          end do
       end block create_pmesh
+
+      ! Initialize SDE solver
+      initialize_sde: block
+         use random, only: random_uniform, random_normal
+         integer :: i,np,j,k,ii
+         real(WP) :: dp,init_rms
+         character(len=str_medium) :: timestamp
+         ! Create solver
+         sde=lpt(cfg=cfg,name='CRW')
+         ! Get particle density from the input
+         call param_read('Particle density',sde%rho)
+         ! Get particle diameter from the input
+         call param_read('Particle diameter', dp)
+         ! Get number of particles
+         np = fs%cfg%nx*fs%cfg%nx*fs%cfg%nx
+         ! Check if spatially correlated
+         call param_read('Correlation function', sde%corr_type)
+         init_rms = (maxval(sgs%visc) / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
+         init_rms = sqrt(2.0_WP / 3.0_WP * init_rms)
+         ! Check if a particles should be read in
+         ! Root process initializes np particles randomly
+         if (sde%cfg%amRoot) then
+            call sde%resize(np)
+            do k=1,fs%cfg%nx
+               do j=1,fs%cfg%nx
+                  do i=1,fs%cfg%nx
+                     ii = (k-1)*fs%cfg%nx**2 + (j-1)*fs%cfg%nx + i
+                     ! Give id
+                     sde%p(ii)%id=int(i,8)
+                     ! Set the diameter
+                     sde%p(ii)%d=dp
+                     ! Assign random position in the domain
+                     sde%p(ii)%pos=[fs%cfg%xm(i),fs%cfg%ym(j),fs%cfg%zm(k)]
+                     ! Give zero velocity
+                     sde%p(ii)%vel=0.0_WP
+                     ! OU
+                     sde%p(ii)%us=[random_normal(m=0.0_WP,sd=init_rms),&
+                     &             random_normal(m=0.0_WP,sd=init_rms),&
+                     &             random_normal(m=0.0_WP,sd=init_rms)]
+                     ! Give zero dt
+                     sde%p(ii)%dt=0.0_WP
+                     ! Locate the particle on the mesh
+                     sde%p(ii)%ind=sde%cfg%get_ijk_global(sde%p(ii)%pos,[sde%cfg%imin,sde%cfg%jmin,sde%cfg%kmin])
+                     ! Init Wiener increment
+                     sde%p(ii)%dW=0.0_WP
+                     ! Activate the particle
+                     sde%p(ii)%flag=0
+                  end do
+               end do
+            end do
+         end if
+         call sde%sync()
+      end block initialize_sde
 
       
       ! Add Ensight output
@@ -259,6 +307,7 @@ contains
          ens_evt=event(time=time,name='Ensight output')
          call param_read('Ensight output period',ens_evt%tper)
          ! Add variables to output
+         call ens_out%add_scalar('div',fs%div)
          call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
@@ -283,6 +332,7 @@ contains
          call mfile%add_column(fs%Wmax,'Wmax')
          call mfile%add_column(meanW,'Wmean')
          call mfile%add_column(fs%Pmax,'Pmax')
+         call mfile%add_column(fs%divmax,'Maximum Divergence')
          call mfile%write()
          ! Create LPT monitor
          call lp%get_max()
@@ -304,6 +354,26 @@ contains
          call lptfile%add_column(lp%Wmax,'Particle Wmax')
          call lptfile%add_column(lp%dmin,'Particle dmin')
          call lptfile%write()
+         ! Create SDE monitor
+         call sde%get_max()
+         sdefile=monitor(amroot=sde%cfg%amRoot,name='sde')
+         call sdefile%add_column(time%n,'Timestep number')
+         call sdefile%add_column(time%t,'Time')
+         call sdefile%add_column(sde%np,'Particle number')
+         call sdefile%add_column(sde%Usvar,'Seen Uvar')
+         call sdefile%add_column(sde%Vsvar,'Seen Vvar')
+         call sdefile%add_column(sde%Wsvar,'Seen Wvar')
+         call sdefile%add_column(sde%Usmin,'Seen Umin')
+         call sdefile%add_column(sde%Usmax,'Seen Umax')
+         call sdefile%add_column(sde%Vsmin,'Seen Vmin')
+         call sdefile%add_column(sde%Vsmax,'Seen Vmax')
+         call sdefile%add_column(sde%Wsmin,'Seen Wmin')
+         call sdefile%add_column(sde%Wsmax,'Seen Wmax')
+         call sdefile%add_column(sde%Umax,'Particle Umax')
+         call sdefile%add_column(sde%Vmax,'Particle Vmax')
+         call sdefile%add_column(sde%Wmax,'Particle Wmax')
+         call sdefile%add_column(sde%dmin,'Particle dmin')
+         call sdefile%write()
          ! Create timing monitor
          tfile=monitor(amroot=fs%cfg%amRoot,name='timing')
          call tfile%add_column(time%n,'Timestep number')
@@ -335,21 +405,32 @@ contains
          
          call time%increment()
          
+         !> ADVANCE GRID
+         wt_lpt%time_in=parallel_time()
+         resU=fs%rho; resV=fs%visc-sgs%visc
+         call sde%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
+         wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
+
+         do ii=1,sde%np_
+            fs%U(sde%p(ii)%ind(1),sde%p(ii)%ind(2),sde%p(ii)%ind(3))=sde%p(ii)%us(1)
+            fs%V(sde%p(ii)%ind(1),sde%p(ii)%ind(2),sde%p(ii)%ind(3))=sde%p(ii)%us(2)
+            fs%W(sde%p(ii)%ind(1),sde%p(ii)%ind(2),sde%p(ii)%ind(3))=sde%p(ii)%us(3)
+         end do
+
+         call fs%cfg%sync(fs%U)
+         call fs%cfg%sync(fs%V)
+         call fs%cfg%sync(fs%W)
+
          !> ADVANCE PARTICLES
          wt_lpt%time_in=parallel_time()
          resU=fs%rho; resV=fs%visc-sgs%visc
-         call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
+         call lp%advance_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
-
-         do ii=1,lp%np_
-            lp%p(ii)%pos(3)=0.0_WP
-            lp%p(ii)%vel(3)=0.0_WP
-            lp%p(ii)%us(3) =0.0_WP
-         end do
          
          !> COMPUTE STATS
          wt_stat%time_in=parallel_time()
          call lp%get_max()
+         call sde%get_max()
 !!         if (mod(time%t,0.2_WP).lt.epsilon(1.0_WP)) call compute_pdfs(time%n)
          wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
          
@@ -367,8 +448,10 @@ contains
          
          ! Perform and output monitoring
          call fs%get_max()
+         call fs%get_div()
          call mfile%write()
          call lptfile%write()
+         call sdefile%write()
 
          ! Monitor timing
          wt_total%time=parallel_time()-wt_total%time_in

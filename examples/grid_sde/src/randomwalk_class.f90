@@ -981,7 +981,7 @@ contains
       call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
       this%p(i)%dW =   [random_normal(m=0.0_WP, sd=1.0_WP), & 
                      &  random_normal(m=0.0_WP, sd=1.0_WP), &
-                     &  random_normal(m=0.0_WP, sd=1.0_WP)] * b
+                     &  random_normal(m=0.0_WP, sd=1.0_WP)]! * b
    end do
    
    ! Share particles across overlap
@@ -1059,7 +1059,7 @@ contains
          counter = 0
          driftsum= 0.0_WP
          sumW    = epsilon(1.0_WP)
-         gamma   = 2.0_WP
+         gamma   = 20.0_WP
 
          ! Get mean Lagrangian velocity in cell
          ! ii=p1%ind(1)
@@ -1114,7 +1114,6 @@ contains
                      end if
 
                      corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
-                     !!b_ij = b_ij + sum(corrtp*dW*rmydt*r12/d12)*r12/d12       ! Neighbor correlation 
                      b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
                      if (p1%id.ne.p2%id) then
                         sumW=sumW+kernel(d12,delta)
@@ -1123,19 +1122,19 @@ contains
                         ! dWdx(2) = sum(L(2,:)*buf)
                         ! dWdx(3) = sum(L(3,:)*buf)
                         unorm=sum((p2%us-p1%us)*r12)/d12
-                !!        if (unorm.lt.0.0_WP) then
-                !!                driftsum=driftsum+gamma*corrtp**2*(dot_product(p2%us-p1%us,r12/d12)*r12/d12 + p2%us-p1%us)
-                !!        else
-                !!                driftsum=driftsum+0.5_WP*gamma*corrtp**2*(dot_product(p2%us-p1%us,r12/d12)*r12/d12 + p2%us-p1%us)
-                !!        end if
                         if (unorm.lt.0.0_WP) then
-                                driftsum=driftsum+gamma*corrtp*(p2%us-p1%us)
+                                driftsum=driftsum+gamma*corrtp*(dot_product(p2%us-p1%us,r12/d12)*r12/d12 + p2%us-p1%us)
                         else
-                                driftsum=driftsum+0.8_WP*gamma*corrtp*(p2%us-p1%us)
+                                driftsum=driftsum+gamma*corrtp*(dot_product(p2%us-p1%us,r12/d12)*r12/d12 + p2%us-p1%us)
                         end if
-                        if (d12.lt.delta) then
-                           driftsum=driftsum-0.25_WP*(2.0_WP/3.0_WP * d12**(-d12/3.0_WP))*r12/d12
-                        end if
+!!                        if (unorm.lt.0.0_WP) then
+!!                                driftsum=driftsum+gamma*corrtp**2*(p2%us-p1%us)
+!!                        else
+!!                                driftsum=driftsum+gamma*corrtp**2*(p2%us-p1%us)
+!!                        end if
+         !               if (d12.lt.delta) then
+         !                  driftsum=driftsum-0.25_WP*(2.0_WP/3.0_WP * d12**(-d12/3.0_WP))*r12/d12
+         !               end if
                      end if
                   end do
                end do
@@ -1231,19 +1230,19 @@ contains
 !               end do
 !            end do
 !         end do
-!         driftsum=0.0_WP
+
+         driftsum=0.0_WP
          call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
          call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
 
          !!tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b*b_ij(1)/sqrt(corrsum) + driftsum(1)/sumW*mydt
          !!tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b*b_ij(2)/sqrt(corrsum) + driftsum(2)/sumW*mydt
          !!tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b*b_ij(3)/sqrt(corrsum) + driftsum(3)/sumW*mydt
-         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b_ij(1)/sqrt(corrsum) + driftsum(1)*mydt
-         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b_ij(2)/sqrt(corrsum) + driftsum(2)*mydt
-         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b_ij(3)/sqrt(corrsum) + driftsum(3)*mydt
-
+         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b*b_ij(1)/sqrt(corrsum) + driftsum(1)*mydt
+         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b*b_ij(2)/sqrt(corrsum) + driftsum(2)*mydt
+         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b*b_ij(3)/sqrt(corrsum) + driftsum(3)*mydt
          p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
-         p1%pos=pold%pos + mydt*(p1%vel + p1%us)
+         p1%pos=pold%pos! + mydt*(p1%vel + p1%us)
          ! Overwrite to output two-point drift
          p1%vel=driftsum!/sumW
          ! Stochastic update
