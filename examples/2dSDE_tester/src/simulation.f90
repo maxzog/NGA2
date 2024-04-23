@@ -2,9 +2,9 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-!   use hypre_str_class,   only: hypre_str
    use incomp_class,      only: incomp
-   use randomwalk_class,  only: lpt
+!!   use randomwalk_class,  only: lpt
+   use dpd_class,         only: lpt
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use partmesh_class,    only: partmesh
@@ -17,7 +17,6 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-!   type(hypre_str),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
@@ -142,7 +141,7 @@ contains
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
-         sgs%visc=0.0025_WP
+         sgs%visc=0.005_WP
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -193,7 +192,7 @@ contains
          end do
          ! Check if spatially correlated
          call param_read('Correlation function', lp%corr_type)
-         init_rms = (0.0025_WP / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
+         init_rms = (maxval(sgs%visc) / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
          init_rms = sqrt(2.0_WP / 3.0_WP * init_rms)
          ! Check if a particles should be read in
          ! Root process initializes np particles randomly

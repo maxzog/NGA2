@@ -1,17 +1,16 @@
 # NGA location if not yet defined
-NGA_HOME ?= /home/maxzog/NGA2_new/
+NGA_HOME ?= ../..
 
 # Compilation parameters
 PRECISION = DOUBLE
 USE_MPI   = TRUE
 USE_FFTW  = TRUE
-USE_HYPRE = FALSE
+USE_HYPRE = TRUE
 USE_LAPACK= TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE 
 COMP      = gnu
 EXEBASE   = nga
-FSANITIZER= FALSE
 
 # Directories that contain user-defined code
 Udirs   := src
@@ -23,19 +22,13 @@ include $(Upack)
 INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
-# Define external libraries - this can also be in .profile
-# LAPACK_DIR= /usr/lapack/#/usr/local/Cellar/lapack/3.11
-# HYPRE_DIR = /opt/libs/hypre/#/Users/maxzog/builds/hypre/src/hypre
-# FFTW_DIR  = /opt/libs/fftw3/#/usr/local/Cellar/fftw/3.3.10_1
-# LAPACK_DIR=/usr/lapack/
-# HYPRE_DIR =/usr/hypre/
-# FFTW_DIR  =/home/maxzog/fftw/
+# External libraries are defined in .profile/.bashrc/.zshrc, but could be defined here as well
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs
 
 # Include NGA base code
-Bdirs   := particles core subgrid constant_density data transform solver config grid libraries
+Bdirs   := core constant_density subgrid data transform solver config grid libraries
 Bpack   += $(foreach dir, $(Bdirs), $(NGA_HOME)/src/$(dir)/Make.package)
 include $(Bpack)
 
