@@ -3,7 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    !use hypre_str_class,   only: hypre_str
-   use fourier3d_class,   only: fourier3d
+   use fft3d_class,       only: fft3d
    use incomp_class,      only: incomp
    use lpt_class,         only: lpt
    use timetracker_class, only: timetracker
@@ -19,7 +19,7 @@ module simulation
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
    !type(hypre_str),   public :: ps
-   type(fourier3d),   public :: ps
+   type(fft3d),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
@@ -238,7 +238,7 @@ contains
          !ps%maxlevel=10
          !call param_read('Pressure iteration',ps%maxit)
          !call param_read('Pressure tolerance',ps%rcvg)
-         ps=fourier3d(cfg=cfg,name='Pressure',nst=7)
+         ps=fft3d(cfg=cfg,name='Pressure',nst=7)
          ! Setup the solver
          call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
@@ -350,7 +350,7 @@ contains
          ! Get number of particles
          call param_read('Number of particles',np)
          ! Check if a stochastic SGS model is used
-         if (restarted) then
+         if (.false.) then
             call param_read('Restart from',timestamp,'r')
             ! Read the part file
             call lp%read(filename='restart/part_'//trim(adjustl(timestamp)))

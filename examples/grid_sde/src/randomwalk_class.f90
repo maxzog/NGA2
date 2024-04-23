@@ -73,6 +73,10 @@ module randomwalk_class
 
      ! Particle density
      real(WP) :: rho                                     !< Density of particle
+     
+     ! Collision parameters (wall)
+     real(WP), dimension(:,:,:),   allocatable :: Wdist  !< Signed wall distance - naive for now (could be redone with FMM)
+     real(WP), dimension(:,:,:,:), allocatable :: Wnorm  !< Wall normal function - naive for now (could be redone with FMM)
 
      ! Gravitational acceleration
      real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
@@ -100,6 +104,8 @@ module randomwalk_class
      real(WP) :: Vsmin,Vsmax,Vsmean,Vsvar                !< V velocity seen info
      real(WP) :: Wsmin,Wsmax,Wsmean,Wsvar                !< W velocity seen info
      integer  :: np_new,np_out                           !< Number of new and removed particles
+     integer  :: ncol=0                                  !< Number of wall collisions 
+     real(WP), dimension(3) :: meanUn                    !< Mean deposition (wall normal) velocity
 
      ! SDE parameters and options
      integer :: corr_type=1
@@ -115,13 +121,19 @@ module randomwalk_class
 
    contains
      procedure :: update_partmesh                        !< Update a partmesh object using current particles
+     procedure :: advance                                !< Step forward the particle ODEs - NO SUBGRID MODEL
+     procedure :: advance_tracer                         !< Step forward the particle ODEs - NO SUBGRID MODEL
      procedure :: advance_drw                            !< Step forward the particle ODEs - discrete random walk
      procedure :: advance_scrw                           !< Step forward the particle ODEs - spatially-correlated random walk
      procedure :: advance_scrw_tracer                    !< Step forward the particle ODEs - spatially-correlated random walk
      procedure :: advance_crw                            !< Step forward the particle ODEs - continuous random walk
+     procedure :: advance_crw_tracer                     !< Step forward the particle ODEs - continuous random walk
      procedure :: advance_crw_fede                       !< Step forward the particle ODEs - continuous random walk with corrections
+     procedure :: advance_crw_anisotropic                !< Step forward the particle ODEs - continuous random walk with anisotropy
+     procedure :: advance_crw_normalized                 !< Step forward the particle ODEs - normalized continuous random walk
      procedure :: correlation_function                   !< Filter kernel for SCRW
      procedure :: get_rhs                                !< Compute rhs of particle odes
+     procedure :: get_tke                                !< Compute SGS TKE at particle location
      procedure :: get_diffusion                          !< Compute diffusion coefficients
      procedure :: get_diffusion_crw                      !< Compute diffusion coefficients
      procedure :: get_drift                              !< Compute drift coefficients
@@ -237,6 +249,81 @@ contains
        self%div_z=0.0_WP
        self%grd_z=0.0_WP
     end if
+    
+    ! Generate a wall distance/norm function
+    allocate(self%Wdist(  self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
+    allocate(self%Wnorm(3,self%cfg%imino_:self%cfg%imaxo_,self%cfg%jmino_:self%cfg%jmaxo_,self%cfg%kmino_:self%cfg%kmaxo_))
+    ! First pass to set correct sign
+    do k=self%cfg%kmino_,self%cfg%kmaxo_
+       do j=self%cfg%jmino_,self%cfg%jmaxo_
+          do i=self%cfg%imino_,self%cfg%imaxo_
+             if (self%cfg%VF(i,j,k).eq.0.0_WP) then
+                self%Wdist(i,j,k)=-sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
+             else
+                self%Wdist(i,j,k)=+sqrt(self%cfg%xL**2+self%cfg%yL**2+self%cfg%zL**2)
+             end if
+             self%Wnorm(:,i,j,k)=0.0_WP
+          end do
+       end do
+    end do
+    ! Second pass to compute local distance
+    do k=self%cfg%kmino_,self%cfg%kmaxo_
+       do j=self%cfg%jmino_,self%cfg%jmaxo_
+          do i=self%cfg%imino_+1,self%cfg%imaxo_
+             if (self%Wdist(i,j,k)*self%Wdist(i-1,j,k).lt.0.0_WP) then
+                ! There is a wall at x(i)
+                if (abs(self%cfg%xm(i  )-self%cfg%x(i)).lt.abs(self%Wdist(i  ,j,k))) then
+                   self%Wdist(i  ,j,k)=sign(self%cfg%xm(i  )-self%cfg%x(i),self%Wdist(i  ,j,k))
+                   self%Wnorm(:,i  ,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-1,j,k),0.0_WP,0.0_WP]
+                end if
+                if (abs(self%cfg%xm(i-1)-self%cfg%x(i)).lt.abs(self%Wdist(i-1,j,k))) then
+                   self%Wdist(i-1,j,k)=sign(self%cfg%xm(i-1)-self%cfg%x(i),self%Wdist(i-1,j,k))
+                   self%Wnorm(:,i-1,j,k)=[self%cfg%VF(i,j,k)-self%cfg%VF(i-1,j,k),0.0_WP,0.0_WP]
+                end if
+             end if
+          end do
+       end do
+    end do
+    call self%cfg%sync(self%Wdist)
+    call self%cfg%sync(self%Wnorm)
+    do k=self%cfg%kmino_,self%cfg%kmaxo_
+       do j=self%cfg%jmino_+1,self%cfg%jmaxo_
+          do i=self%cfg%imino_,self%cfg%imaxo_
+             if (self%Wdist(i,j,k)*self%Wdist(i,j-1,k).lt.0.0_WP) then
+                ! There is a wall at y(j)
+                if (abs(self%cfg%ym(j  )-self%cfg%y(j)).lt.abs(self%Wdist(i,j  ,k))) then
+                   self%Wdist(i,j  ,k)=sign(self%cfg%ym(j  )-self%cfg%y(j),self%Wdist(i,j  ,k))
+                   self%Wnorm(:,i,j  ,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-1,k),0.0_WP]
+                end if
+                if (abs(self%cfg%ym(j-1)-self%cfg%y(j)).lt.abs(self%Wdist(i,j-1,k))) then
+                   self%Wdist(i,j-1,k)=sign(self%cfg%ym(j-1)-self%cfg%y(j),self%Wdist(i,j-1,k))
+                   self%Wnorm(:,i,j-1,k)=[0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j-1,k),0.0_WP]
+                end if
+             end if
+          end do
+       end do
+    end do
+    call self%cfg%sync(self%Wdist)
+    call self%cfg%sync(self%Wnorm)
+    do k=self%cfg%kmino_+1,self%cfg%kmaxo_
+       do j=self%cfg%jmino_,self%cfg%jmaxo_
+          do i=self%cfg%imino_,self%cfg%imaxo_
+             if (self%Wdist(i,j,k)*self%Wdist(i,j,k-1).lt.0.0_WP) then
+                ! There is a wall at z(k)
+                if (abs(self%cfg%zm(k  )-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k  ))) then
+                   self%Wdist(i,j,k  )=sign(self%cfg%zm(k  )-self%cfg%z(k),self%Wdist(i,j,k  ))
+                   self%Wnorm(:,i,j,k  )=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-1)]
+                end if
+                if (abs(self%cfg%zm(k-1)-self%cfg%z(k)).lt.abs(self%Wdist(i,j,k-1))) then
+                   self%Wdist(i,j,k-1)=sign(self%cfg%zm(k-1)-self%cfg%z(k),self%Wdist(i,j,k-1))
+                   self%Wnorm(:,i,j,k-1)=[0.0_WP,0.0_WP,self%cfg%VF(i,j,k)-self%cfg%VF(i,j,k-1)]
+                end if
+             end if
+          end do
+       end do
+    end do
+    call self%cfg%sync(self%Wdist)
+    call self%cfg%sync(self%Wnorm)
 
     ! Create implicit solver object for filtering
     self%implicit=ddadi(cfg=self%cfg,name='Filter',nst=7)
@@ -271,6 +358,243 @@ contains
 
   end function constructor
 
+  !> Advance the particle equations by a specified time step dt
+  !  using NO SUBGRID MODEL
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+  subroutine advance(this,dt,U,V,W,rho,visc)
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+    use mathtools, only: Pi
+    use random, only: random_normal
+    use parallel, only: MPI_REAL_WP
+    implicit none
+    class(lpt), intent(inout) :: this
+    real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(3) :: acc
+    integer :: i,ierr
+    real(WP) :: mydt,dt_done
+    real(WP) :: b 
+    type(part) :: myp,pold
+
+    ! Zero out number of particles removed
+    this%np_out=0
+    ! Zero out number of wall collisions
+    this%ncol=0
+    ! Reset meanUn
+    this%meanUn=0.0_WP
+
+    ! Advance the equations
+    do i=1,this%np_
+       ! Avoid particles with id=0
+       if (this%p(i)%id.eq.0) cycle
+       ! Create local copy of particle
+       myp=this%p(i)
+       ! Time-integrate until dt_done=dt
+       dt_done=0.0_WP
+       do while (dt_done.lt.dt)
+          ! Decide the timestep size
+          mydt=min(myp%dt,dt-dt_done)
+          ! Remember the particle
+          pold=myp
+
+          ! Advance with Euler prediction
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+0.5_WP*mydt*myp%vel
+          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
+
+          ! Correct with midpoint rule
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+mydt*myp%vel
+          myp%vel=pold%vel+mydt*(acc+this%gravity)
+          myp%Us=0.0_WP
+          ! Relocalize
+          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+          ! Increment
+          dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
+            end if
+          end block wall_col
+       end do
+       ! Correct the position to take into account periodicity
+       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       ! Handle particles that have left the domain
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       ! Relocalize the particle
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       ! Count number of particles removed
+       if (myp%flag.eq.1) this%np_out=this%np_out+1
+       ! Copy back to particle
+       if (myp%id.ne.-1) this%p(i)=myp
+    end do
+     
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%meanUn,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+    if (this%ncol.ne.0) then
+       this%meanUn=this%meanUn/this%ncol
+    else
+       this%meanUn=0.0_WP
+    end if
+
+    ! Communicate particles
+    call this%sync()
+
+    ! Sum up particles removed
+    call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+    ! Log/screen output
+    logging: block
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use param,    only: verbose
+      use messager, only: log
+      use string,   only: str_long
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+         if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+         if (verbose.gt.0) call log(message)
+      end if
+    end block logging
+
+  end subroutine advance
+
+ !> Advance the particle equations by a specified time step dt
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+ subroutine advance_tracer(this,dt,U,V,W)
+   use mpi_f08,    only: MPI_SUM,MPI_INTEGER
+   use mathtools,  only: Pi,normalize,inverse_matrix
+   use random,     only: random_normal
+   use messager,   only: die
+   implicit none
+   class(lpt), intent(inout) :: this
+   real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
+   real(WP) :: rmydt,mydt,dt_done,sumW,unorm
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
+   real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf
+   real(WP), dimension(3,3) :: L,Linv
+   type(part) :: pold,p1,p2
+
+   ! Zero out number of particles removed
+   this%np_out=0
+
+   ! Share particles across overlap
+   no = this%cfg%no
+   call this%share(no)
+   
+   ! Advance the equations
+   delta=this%cfg%min_meshsize
+   do i=1,this%np_
+      ! Avoid particles with id=0
+      if (this%p(i)%id.eq.0) cycle
+      ! Time-integrate until dt_done=dt
+      dt_done=0.0_WP
+      
+      do while (dt_done.lt.dt)
+         ! Decide the timestep size
+         ! mydt=min(this%p(i)%dt,dt-dt_done)
+         mydt=dt
+         ! Remember the particle
+         pold=this%p(i)
+         p1=this%p(i)
+         ! Advance with Euler prediction
+         !call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos + 0.5_WP*mydt*p1%vel
+
+         ! Store particle data
+         r1=p1%pos
+
+         p1%us=0.0_WP
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos + mydt*p1%vel
+
+         ! Relocalize
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
+         ! Increment
+         dt_done=dt_done+mydt
+
+         ! Spectral reflection with walls
+         wall_col: block
+           use mathtools, only: Pi,normalize
+           real(WP) :: d12
+           real(WP), dimension(3) :: n12,Un
+           if (this%cfg%VF(p1%ind(1),p1%ind(2),p1%ind(3)).le.0.0_WP) then
+              d12=this%cfg%get_scalar(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),S=this%Wdist,bc='d')
+              n12=this%Wnorm(:,p1%ind(1),p1%ind(2),p1%ind(3))
+              n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+              p1%pos=p1%pos-2.0_WP*d12*n12
+              Un=sum(p1%vel*n12)*n12
+              p1%vel=p1%vel-2.0_WP*Un
+           end if
+         end block wall_col
+         ! Correct the position to take into account periodicity
+         if (this%cfg%xper) p1%pos(1)=this%cfg%x(this%cfg%imin)+modulo(p1%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+         if (this%cfg%yper) p1%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(p1%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+         if (this%cfg%zper) p1%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(p1%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+         ! Handle particles that have left the domain
+         if (p1%pos(1).lt.this%cfg%x(this%cfg%imin).or.p1%pos(1).gt.this%cfg%x(this%cfg%imax+1)) p1%flag=1
+         if (p1%pos(2).lt.this%cfg%y(this%cfg%jmin).or.p1%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) p1%flag=1
+         if (p1%pos(3).lt.this%cfg%z(this%cfg%kmin).or.p1%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) p1%flag=1
+         ! Relocalize the particle
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
+         ! Copy back to the particle
+         this%p(i)=p1
+         ! Count number of particles removed
+         if (p1%flag.eq.1) this%np_out=this%np_out+1
+      end do
+   end do
+
+   ! Communicate particles
+   call this%sync()
+
+   ! Sum up particles removed
+   call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+   ! Log/screen output
+   logging: block
+     use, intrinsic :: iso_fortran_env, only: output_unit
+     use param,    only: verbose
+     use messager, only: log
+     use string,   only: str_long
+     character(len=str_long) :: message
+     if (this%cfg%amRoot) then
+        write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+        if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+        if (verbose.gt.0) call log(message)
+     end if
+   end block logging
+
+ end subroutine advance_tracer
+
+
   subroutine get_drift(this, p, rho, sgs_visc, a)
    use random, only: random_normal
    implicit none
@@ -294,6 +618,27 @@ contains
 
    a = tau_crwi
   end subroutine get_drift
+
+  subroutine get_tke(this, p, rho, sgs_visc, tke)
+   use random, only: random_normal
+   implicit none
+   class(lpt), intent(inout) :: this
+   type(part), intent(inout) :: p
+   real(WP), intent(inout) :: tke
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho           !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:
+   real(WP), dimension(3) :: fvel
+   real(WP) :: fvisc,frho,delta
+
+   !> Interpolate values
+   frho =this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho     ,    bc='n')
+   fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=sgs_visc,    bc='n')
+   delta=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=this%cfg%vol,bc='n')
+   delta=delta**(0.333333_WP)
+
+   !> Compute TKE
+   tke = (fvisc/frho/delta/0.067_WP)**2
+  end subroutine get_tke
 
   subroutine get_diffusion(this, p, rho, sgs_visc, U, V, W, b)
    use random, only: random_normal
@@ -474,7 +819,7 @@ contains
             use mathtools, only: Pi,normalize
             integer :: i2,ii,jj,kk,nn
             real(WP), dimension(3) :: r1,r2,r12,dW
-            real(WP) :: corrtp,d12,sigma
+            real(WP) :: corrtp,d12
 
             ! Store particle data
             r1=this%p(i)%pos
@@ -483,245 +828,6 @@ contains
             b_ij    = 0.0_WP
             corrsum = 0.0_WP
             driftsum= 0.0_WP
-            sigma   = 0.7688_WP 
-
-            do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
-               do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
-                  do ii=this%p(i)%ind(1)-no+1,this%p(i)%ind(1)+no-1
-                     ! Loop over particles in that cell
-                     do nn=1,npic(ii,jj,kk)  
-                        ! Get index of neighbor particle
-                        i2=ipic(nn,ii,jj,kk)
-
-                        ! Get relevant data from correct storage
-                        if (i2.gt.0) then
-                           r2=this%p(i2)%pos
-                           dW=this%p(i2)%dW
-                           usj=this%p(i2)%us
-                        else if (i2.lt.0) then
-                           i2=-i2
-                           r2=this%g(i2)%pos
-                           dW=this%g(i2)%dW
-                           usj=this%g(i2)%us
-                        end if
-
-                        ! Compute relative information
-                        r12 = r2-r1
-                        d12 = norm2(r12)
-                        call this%correlation_function(r=d12,rho_ij=corrtp)
-
-                        if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
-                           print *, corrtp
-                           call die("[advance] corr > 1")
-                        end if
-                        if (corrtp.lt.0.0_WP) then 
-                           print *, corrtp
-                           call die("[advance] corr < 0")
-                        end if
-
-                        corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
-                        b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
-                        if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(2.0_WP*Sf(d12)/d12 + (Sf(d12+0.001_WP)-Sf(d12-0.001_WP))/0.002_WP)*r12/d12
-                     end do
-                  end do
-               end do
-            end do
-         end block correlate_neighbors
-
-         call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
-         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum) - driftsum(1)*mydt
-         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum) - driftsum(2)*mydt
-         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum) - driftsum(3)*mydt
-
-         ! Correct with midpoint rule
-         call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
-         this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
-         this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
-
-         ! Stochastic update
-         this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
-         this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
-         this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
-
-         ! Relocalize
-         this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
-         ! Increment
-         dt_done=dt_done+mydt
-         ! Correct the position to take into account periodicity
-         if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
-         if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
-         if (this%cfg%zper) this%p(i)%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(this%p(i)%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
-         ! Handle particles that have left the domain
-         if (this%p(i)%pos(1).lt.this%cfg%x(this%cfg%imin).or.this%p(i)%pos(1).gt.this%cfg%x(this%cfg%imax+1)) this%p(i)%flag=1
-         if (this%p(i)%pos(2).lt.this%cfg%y(this%cfg%jmin).or.this%p(i)%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) this%p(i)%flag=1
-         if (this%p(i)%pos(3).lt.this%cfg%z(this%cfg%kmin).or.this%p(i)%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) this%p(i)%flag=1
-         ! Relocalize the particle
-         this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
-         ! Count number of particles removed
-         if (this%p(i)%flag.eq.1) this%np_out=this%np_out+1
-      end do
-   end do
-
-   ! Communicate particles
-   call this%sync()
-
-   ! Sum up particles removed
-   call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
-
-   ! Cleanup
-   if (allocated(npic)) deallocate(npic)
-   if (allocated(ipic)) deallocate(ipic)
-
-   ! Log/screen output
-   logging: block
-     use, intrinsic :: iso_fortran_env, only: output_unit
-     use param,    only: verbose
-     use messager, only: log
-     use string,   only: str_long
-     character(len=str_long) :: message
-     if (this%cfg%amRoot) then
-        write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
-        if (verbose.gt.1) write(output_unit,'(a)') trim(message)
-        if (verbose.gt.0) call log(message)
-     end if
-   end block logging
-   contains
-      function Sf(r) result(val)
-         use mathtools, only: Pi
-         real(WP) :: r, val, t1, t2, t3, WIDTH
-         WIDTH=0.1_WP
-         t1 = WIDTH**3*pi**1.5*erf(40/WIDTH)**3
-         t2 = 0.5*WIDTH**3*pi**1.5*erf(40/WIDTH)**2*(erf((40-r)/WIDTH)+erf((40+r)/WIDTH))
-         t3 = 0.5*WIDTH**3*exp(-r**2/(2*WIDTH)**2)*pi**1.5*erf(40/WIDTH)**2*(erf((80-r)/2/WIDTH)+erf((80+r)/2/WIDTH))
-         val = t1 + t2 - 2.0_WP * t3
-      end function Sf
-   
- end subroutine advance_scrw
-
- !> Advance the particle equations by a specified time step dt
-  !> p%id=0 => no coll, no solve
-  !> p%id=-1=> no coll, no move
- subroutine advance_scrw_tracer(this,dt,U,V,W,rho,sgs_visc)
-   use mpi_f08,    only: MPI_SUM,MPI_INTEGER
-   use mathtools,  only: Pi
-   use random,     only: random_normal
-   use messager,   only: die
-   implicit none
-   class(lpt), intent(inout) :: this
-   real(WP), intent(inout) :: dt  !< Timestep size over which to advance
-   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP), dimension(3) :: b_ij,driftsum,usj
-   integer :: i,ierr,no
-   integer, dimension(:,:,:), allocatable :: npic
-   integer, dimension(:,:,:,:), allocatable :: ipic
-   real(WP) :: rmydt,mydt,dt_done
-   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3 
-   type(part) :: pold
-
-   ! Zero out number of particles removed
-   this%np_out=0
-
-   do i=1,this%np_
-      this%p(i)%dW =   [random_normal(m=0.0_WP, sd=1.0_WP), & 
-                     &  random_normal(m=0.0_WP, sd=1.0_WP), &
-                     &  random_normal(m=0.0_WP, sd=1.0_WP)]
-   end do
-   
-   ! Share particles across overlap
-   no = this%cfg%no
-   call this%share(no)
-
-   pic_prep: block
-      use mpi_f08
-      integer :: ip,jp,kp
-      integer :: mymax_npic,max_npic
-
-      ! Allocate number of particle in cell
-      allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
-
-      ! Count particles and ghosts per cell
-      do i=1,this%np_
-         ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
-         npic(ip,jp,kp)=npic(ip,jp,kp)+1
-      end do
-      do i=1,this%ng_
-         ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
-         npic(ip,jp,kp)=npic(ip,jp,kp)+1
-      end do
-
-      ! Get maximum number of particle in cell
-      mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
-
-      ! Allocate pic map
-      allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
-
-      ! Assemble pic map and update diffusion coefficients
-      npic=0
-      do i=1,this%np_
-         ! PIC map
-         ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
-         npic(ip,jp,kp)=npic(ip,jp,kp)+1
-         ipic(npic(ip,jp,kp),ip,jp,kp)=i
-
-         ! Diffusion
-         ! this%p(i)%dW = [random_normal(m=0.0_WP, sd=1.0_WP), & 
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP), &
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP)]
-         call get_diffusion_crw(this=this,p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
-         this%p(i)%dW = b * this%p(i)%dW 
-      end do
-      do i=1,this%ng_
-         ! PIC map
-         ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
-         npic(ip,jp,kp)=npic(ip,jp,kp)+1
-         ipic(npic(ip,jp,kp),ip,jp,kp)=-i
-
-         ! Diffusion
-         ! this%g(i)%dW = [random_normal(m=0.0_WP, sd=1.0_WP), & 
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP), &
-         !              &  random_normal(m=0.0_WP, sd=1.0_WP)]
-         call get_diffusion_crw(this=this,p=this%g(i),rho=rho,sgs_visc=sgs_visc,b=b)
-         this%g(i)%dW = b * this%g(i)%dW
-      end do
-   end block pic_prep
-   
-   ! Advance the equations
-   do i=1,this%np_
-      ! Avoid particles with id=0
-      if (this%p(i)%id.eq.0) cycle
-      ! Time-integrate until dt_done=dt
-      dt_done=0.0_WP
-      
-      do while (dt_done.lt.dt)
-         ! Decide the timestep size
-         ! mydt=min(this%p(i)%dt,dt-dt_done)
-         mydt=dt
-         rmydt=sqrt(mydt)
-         ! Remember the particle
-         pold=this%p(i)
-         ! Advance with Euler prediction
-         !call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
-         this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
-         this%p(i)%pos=pold%pos + 0.5_WP*mydt*(this%p(i)%vel + this%p(i)%us)
-         
-         correlate_neighbors: block
-            use mathtools, only: Pi,normalize
-            integer :: i2,ii,jj,kk,nn
-            real(WP), dimension(3) :: r1,r2,r12,dW
-            real(WP) :: corrtp,d12,sigma
-
-            ! Store particle data
-            r1=this%p(i)%pos
-
-            ! Zero out neighbor contribution
-            b_ij    = 0.0_WP
-            corrsum = 0.0_WP
-            driftsum= 0.0_WP
-            sigma   = 0.7688_WP 
 
             do kk=this%p(i)%ind(3)-no+1,this%p(i)%ind(3)+no-1
                do jj=this%p(i)%ind(2)-no+1,this%p(i)%ind(2)+no-1
@@ -759,9 +865,7 @@ contains
 
                         corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
                         b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
-                        !driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
-                        !if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(2.0_WP*Sf(d12)/d12 + (Sf(d12+0.0001_WP)-Sf(d12-0.0001_WP))/0.0002_WP)*r12/d12
-                        if (d12.gt.epsilon(0.0_WP)) driftsum = driftsum + sigma*(Sf(d12+0.0001_WP)-Sf(d12-0.0001_WP))/0.0002_WP*r12/d12
+                        driftsum = driftsum + corrtp*corrtp*(this%p(i)%us - usj) ! Neighbor drift
                      end do
                   end do
                end do
@@ -770,22 +874,39 @@ contains
 
          call this%get_drift(p=this%p(i),rho=rho,sgs_visc=sgs_visc,a=a)
 
-         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) + b_ij(1)/sqrt(corrsum) - driftsum(1)*mydt
-         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) + b_ij(2)/sqrt(corrsum) - driftsum(2)*mydt
-         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) + b_ij(3)/sqrt(corrsum) - driftsum(3)*mydt
+         tmp1 = (1.0_WP - a*mydt)*this%p(i)%us(1) - a*driftsum(1)*mydt + b_ij(1)/sqrt(corrsum)
+         tmp2 = (1.0_WP - a*mydt)*this%p(i)%us(2) - a*driftsum(2)*mydt + b_ij(2)/sqrt(corrsum)
+         tmp3 = (1.0_WP - a*mydt)*this%p(i)%us(3) - a*driftsum(3)*mydt + b_ij(3)/sqrt(corrsum)
 
-         this%p(i)%vel=this%cfg%get_velocity(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),U=U,V=V,W=W)
-         this%p(i)%pos=pold%pos + mydt*(this%p(i)%vel + this%p(i)%us)
+         ! Correct with midpoint rule
+         call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+         this%p(i)%pos=pold%pos+mydt*this%p(i)%vel
+         this%p(i)%vel=pold%vel+mydt*(acc+this%gravity)
 
          ! Stochastic update
-         this%p(i)%us(1) = tmp1
-         this%p(i)%us(2) = tmp2
-         this%p(i)%us(3) = tmp3
+         this%p(i)%us(1) = tmp1! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW1**2 - mydt) 
+         this%p(i)%us(2) = tmp2! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW2**2 - mydt) 
+         this%p(i)%us(3) = tmp3! + b_crw*0.5_WP*(mydt+epsilon(1.0_WP))**(-0.5_WP)*(dW3**2 - mydt)
 
          ! Relocalize
          this%p(i)%ind=this%cfg%get_ijk_global(this%p(i)%pos,this%p(i)%ind)
          ! Increment
          dt_done=dt_done+mydt
+
+         ! Spectral reflection with walls
+         wall_col: block
+           use mathtools, only: Pi,normalize
+           real(WP) :: d12
+           real(WP), dimension(3) :: n12,Un
+           if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
+              d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
+              n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+              n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+              this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
+              Un=sum(this%p(i)%vel*n12)*n12
+              this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+           end if
+         end block wall_col
          ! Correct the position to take into account periodicity
          if (this%cfg%xper) this%p(i)%pos(1)=this%cfg%x(this%cfg%imin)+modulo(this%p(i)%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
          if (this%cfg%yper) this%p(i)%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(this%p(i)%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
@@ -824,18 +945,528 @@ contains
         if (verbose.gt.0) call log(message)
      end if
    end block logging
-   contains
-      function Sf(r) result(val)
-         use mathtools, only: Pi
-         real(WP) :: r, val, t1, t2, t3, WIDTH
-         WIDTH=0.1_WP
-         t1 = WIDTH**3*pi**1.5*erf(40/WIDTH)**3
-         t2 = 0.5*WIDTH**3*pi**1.5*erf(40/WIDTH)**2*(erf((40-r)/WIDTH)+erf((40+r)/WIDTH))
-         t3 = 0.5*WIDTH**3*exp(-r**2/(2*WIDTH)**2)*pi**1.5*erf(40/WIDTH)**2*(erf((80-r)/2/WIDTH)+erf((80+r)/2/WIDTH))
-         val = t1 + t2 - 2.0_WP * t3
-      end function Sf
+   
+ end subroutine advance_scrw
+
+ !> Advance the particle equations by a specified time step dt
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+ subroutine advance_scrw_tracer(this,dt,U,V,W,rho,sgs_visc)
+   use mpi_f08,    only: MPI_SUM,MPI_INTEGER
+   use mathtools,  only: Pi,normalize,inverse_matrix
+   use random,     only: random_normal
+   use messager,   only: die
+   implicit none
+   class(lpt), intent(inout) :: this
+   real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(3) :: b_ij,driftsum,usj
+   integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
+   integer, dimension(:,:,:), allocatable :: npic
+   integer, dimension(:,:,:,:), allocatable :: ipic
+   real(WP) :: rmydt,mydt,dt_done,sumW,unorm,gamma,tmp
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
+   real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf,frj,fri
+   real(WP), dimension(3,3) :: L,Linv
+   type(part) :: pold,p1,p2
+
+   ! Zero out number of particles removed
+   this%np_out=0
+
+   do i=1,this%np_
+      call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
+      this%p(i)%dW =   [random_normal(m=0.0_WP, sd=1.0_WP), & 
+                     &  random_normal(m=0.0_WP, sd=1.0_WP), &
+                     &  random_normal(m=0.0_WP, sd=1.0_WP)]! * b
+   end do
+   
+   ! Share particles across overlap
+   no = this%cfg%no
+   call this%share(no)
+
+   pic_prep: block
+      use mpi_f08
+      integer :: ip,jp,kp
+      integer :: mymax_npic,max_npic
+
+      ! Allocate number of particle in cell
+      allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
+
+      ! Count particles and ghosts per cell
+      do i=1,this%np_
+         ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+         npic(ip,jp,kp)=npic(ip,jp,kp)+1
+      end do
+      do i=1,this%ng_
+         ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+         npic(ip,jp,kp)=npic(ip,jp,kp)+1
+      end do
+
+      ! Get maximum number of particle in cell
+      mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+
+      ! Allocate pic map
+      allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
+
+      ! Assemble pic map and update diffusion coefficients
+      npic=0
+      do i=1,this%np_
+         ! PIC map
+         ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+         npic(ip,jp,kp)=npic(ip,jp,kp)+1
+         ipic(npic(ip,jp,kp),ip,jp,kp)=i
+      end do
+      do i=1,this%ng_
+         ! PIC map
+         ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+         npic(ip,jp,kp)=npic(ip,jp,kp)+1
+         ipic(npic(ip,jp,kp),ip,jp,kp)=-i
+      end do
+   end block pic_prep
+   
+   ! Advance the equations
+   delta=2.4_WP*this%cfg%min_meshsize
+   do i=1,this%np_
+      ! Avoid particles with id=0
+      if (this%p(i)%id.eq.0) cycle
+      ! Time-integrate until dt_done=dt
+      dt_done=0.0_WP
+      
+      do while (dt_done.lt.dt)
+         ! Decide the timestep size
+         ! mydt=min(this%p(i)%dt,dt-dt_done)
+         mydt=dt
+         rmydt=sqrt(mydt)
+         ! Remember the particle
+         pold=this%p(i)
+         p1=this%p(i)
+         ! Advance with Euler prediction
+         !call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=this%p(i),acc=acc,opt_dt=this%p(i)%dt)
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos + 0.5_WP*mydt*(p1%vel + p1%us)
+
+         ! Store particle data
+         r1=p1%pos
+
+         ! Correlate diffusion
+         b_ij    = 0.0_WP
+         corrsum = 0.0_WP
+         L       = 0.0_WP
+         counter = 0
+         driftsum= 0.0_WP
+         sumW    = epsilon(1.0_WP)
+         gamma   = 20.0_WP
+
+         ! Get mean Lagrangian velocity in cell
+         ! ii=p1%ind(1)
+         ! jj=p1%ind(2)
+         ! kk=p1%ind(3)
+         ! do nn=1,npic(ii,jj,kk)
+         !    i2=ipic(nn,ii,jj,kk)
+         !    if (i2.gt.0) then
+         !       p2=this%p(i2)
+         !    else
+         !       i2=-i2
+         !       p2=this%g(i2)
+         !    end if
+         !    driftsum=driftsum+p2%us
+         ! end do
+         ! driftsum=driftsum/npic(ii,jj,kk)
+
+         do kk=p1%ind(3)-no,p1%ind(3)+no
+            do jj=p1%ind(2)-no,p1%ind(2)+no
+               do ii=p1%ind(1)-no,p1%ind(1)+no
+                  ! Loop over particles in that cell
+                  do nn=1,npic(ii,jj,kk)  
+                     ! Get index of neighbor particle
+                     i2=ipic(nn,ii,jj,kk)
+
+                     ! Get relevant data from correct storage
+                     if (i2.gt.0) then
+                        p2=this%p(i2)
+                        r2=this%p(i2)%pos
+                        dW=this%p(i2)%dW
+                        usj=this%p(i2)%us
+                     else if (i2.lt.0) then
+                        i2=-i2
+                        p2=this%g(i2)
+                        r2=this%g(i2)%pos
+                        dW=this%g(i2)%dW
+                        usj=this%g(i2)%us
+                     end if
+
+                     ! Compute relative information
+                     r12 = r2-r1
+                     d12  = norm2(r12)
+                     call this%correlation_function(r=d12,rho_ij=corrtp)
+
+                     if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
+                        print *, corrtp
+                        call die("[advance] corr > 1")
+                     end if
+                     if (corrtp.lt.0.0_WP) then 
+                        print *, corrtp
+                        call die("[advance] corr < 0")
+                     end if
+
+                     corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
+                     b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
+                     if (p1%id.ne.p2%id) then
+                        sumW=sumW+kernel(d12,delta)
+                        dWdx=gradW(d12,delta,p1%pos,p2%pos)
+                        ! dWdx(1) = sum(L(1,:)*buf)
+                        ! dWdx(2) = sum(L(2,:)*buf)
+                        ! dWdx(3) = sum(L(3,:)*buf)
+                        unorm=sum((p2%us-p1%us)*r12)/d12
+                        if (unorm.lt.0.0_WP) then
+                                driftsum=driftsum+gamma*corrtp*(dot_product(p2%us-p1%us,r12/d12)*r12/d12 + p2%us-p1%us)
+                        else
+                                driftsum=driftsum+gamma*corrtp*(dot_product(p2%us-p1%us,r12/d12)*r12/d12 + p2%us-p1%us)
+                        end if
+!!                        if (unorm.lt.0.0_WP) then
+!!                                driftsum=driftsum+gamma*corrtp**2*(p2%us-p1%us)
+!!                        else
+!!                                driftsum=driftsum+gamma*corrtp**2*(p2%us-p1%us)
+!!                        end if
+         !               if (d12.lt.delta) then
+         !                  driftsum=driftsum-0.25_WP*(2.0_WP/3.0_WP * d12**(-d12/3.0_WP))*r12/d12
+         !               end if
+                     end if
+                  end do
+               end do
+            end do
+         end do
+
+         ! ! Correlate drift
+         ! do kk=p1%ind(3)-no,p1%ind(3)+no
+         !    do jj=p1%ind(2)-no,p1%ind(2)+no
+         !       do ii=p1%ind(1)-no,p1%ind(1)+no
+         !          ! Loop over particles in that cell
+         !          do nn=1,npic(ii,jj,kk)  
+         !             ! Get index of neighbor particle
+         !             i2=ipic(nn,ii,jj,kk)
+         !
+         !             ! Get relevant data from correct storage
+         !             if (i2.gt.0) then
+         !                p2=this%p(i2)
+         !                r2=p2%pos
+         !             else if (i2.lt.0) then
+         !                i2=-i2
+         !                p2=this%g(i2)
+         !                r2=p2%pos
+         !             end if
+         !
+         !             ! Compute relative information
+         !             r12 = r1-r2
+         !             d12  = norm2(r12)
+         !              if (p1%id.ne.p2%id) then
+         !                   dWdx = gradW(d12,delta,p1%pos,p2%pos)
+         !                   L(1,1) = L(1,1) + (p2%pos(1)-p1%pos(1))*dWdx(1)
+         !                   L(1,2) = L(1,2) + (p2%pos(1)-p1%pos(1))*dWdx(2)
+         !                   L(1,3) = L(1,3) + (p2%pos(1)-p1%pos(1))*dWdx(3)
+         !                   L(2,1) = L(2,1) + (p2%pos(2)-p1%pos(2))*dWdx(1)
+         !                   L(2,2) = L(2,2) + (p2%pos(2)-p1%pos(2))*dWdx(2)
+         !                   L(2,3) = L(2,3) + (p2%pos(2)-p1%pos(2))*dWdx(3)
+         !                   L(3,1) = L(3,1) + (p2%pos(3)-p1%pos(3))*dWdx(1)
+         !                   L(3,2) = L(3,2) + (p2%pos(3)-p1%pos(3))*dWdx(2)
+         !                   L(3,3) = L(3,3) + (p2%pos(3)-p1%pos(3))*dWdx(3)
+         !                   counter= counter + 1
+         !                end if
+         !          end do
+         !       end do
+         !    end do
+         ! end do
+         ! print *, "MADE IT BEFORE INVERSE"
+         ! if (counter.eq.0) then
+         !    L=0.0_WP
+         !    L(1,1) = 1.0_WP
+         !    L(2,2) = 1.0_WP
+         !    L(3,3) = 1.0_WP
+         ! end if
+         ! print *, "COUNTER :: ", counter
+         ! ! Invert L matrix for gradient correction
+         ! call inverse_matrix(L,Linv,3)
+         ! ! print *, "MADE IT AFTER INVERSE"
+
+!         driftsum=0.0_WP
+!         sumW=epsilon(1.0_WP)
+!         do kk=p1%ind(3)-no,p1%ind(3)+no
+!            do jj=p1%ind(2)-no,p1%ind(2)+no
+!               do ii=p1%ind(1)-no,p1%ind(1)+no
+!                  ! Loop over particles in that cell
+!                  do nn=1,npic(ii,jj,kk)  
+!                     ! Get index of neighbor particle
+!                     i2=ipic(nn,ii,jj,kk)
+!
+!                     ! Get relevant data from correct storage
+!                     if (i2.gt.0) then
+!                        p2=this%p(i2)
+!                        r2=p2%pos
+!                     else if (i2.lt.0) then
+!                        i2=-i2
+!                        p2=this%g(i2)
+!                        r2=p2%pos
+!                     end if
+!
+!                     ! Compute relative information
+!                     r12 = r2-r1
+!                     d12 = norm2(r12)
+!                      if (p1%id.ne.p2%id) then
+!                         ! Compute the gradient
+!                         sumW=sumW+kernel(d12,delta)
+!                         dWdx=gradW(d12,delta,p1%pos,p2%pos)
+!                         ! dWdx(1) = sum(L(1,:)*buf)
+!                         ! dWdx(2) = sum(L(2,:)*buf)
+!                         ! dWdx(3) = sum(L(3,:)*buf)
+!                         ! driftsum=driftsum+dWdx*(dot_product(p2%us,r12/d12)-dot_product(p1%us,r12/d12))**2
+!                         unorm=sum((p2%us-p1%us)*r12)/d12
+!                         driftsum=driftsum+dWdx*(unorm*r12/d12)**2
+!                      end if
+!                  end do
+!               end do
+!            end do
+!         end do
+
+         driftsum=0.0_WP
+         call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
+         call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
+
+         !!tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b*b_ij(1)/sqrt(corrsum) + driftsum(1)/sumW*mydt
+         !!tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b*b_ij(2)/sqrt(corrsum) + driftsum(2)/sumW*mydt
+         !!tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b*b_ij(3)/sqrt(corrsum) + driftsum(3)/sumW*mydt
+         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b*b_ij(1)/sqrt(corrsum) + driftsum(1)*mydt
+         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b*b_ij(2)/sqrt(corrsum) + driftsum(2)*mydt
+         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b*b_ij(3)/sqrt(corrsum) + driftsum(3)*mydt
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos! + mydt*(p1%vel + p1%us)
+         ! Overwrite to output two-point drift
+         p1%vel=driftsum!/sumW
+         ! Stochastic update
+         p1%us(1) = tmp1
+         p1%us(2) = tmp2
+         p1%us(3) = tmp3
+
+         ! Relocalize
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
+         ! Increment
+         dt_done=dt_done+mydt
+
+         ! Spectral reflection with walls
+         wall_col: block
+           use mathtools, only: Pi,normalize
+           real(WP) :: d12
+           real(WP), dimension(3) :: n12,Un
+           if (this%cfg%VF(p1%ind(1),p1%ind(2),p1%ind(3)).le.0.0_WP) then
+              d12=this%cfg%get_scalar(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),S=this%Wdist,bc='d')
+              n12=this%Wnorm(:,p1%ind(1),p1%ind(2),p1%ind(3))
+              n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+              p1%pos=p1%pos-2.0_WP*d12*n12
+              Un=sum(p1%vel*n12)*n12
+              p1%vel=p1%vel-2.0_WP*Un
+           end if
+         end block wall_col
+         ! Correct the position to take into account periodicity
+         if (this%cfg%xper) p1%pos(1)=this%cfg%x(this%cfg%imin)+modulo(p1%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+         if (this%cfg%yper) p1%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(p1%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+         if (this%cfg%zper) p1%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(p1%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+         ! Handle particles that have left the domain
+         if (p1%pos(1).lt.this%cfg%x(this%cfg%imin).or.p1%pos(1).gt.this%cfg%x(this%cfg%imax+1)) p1%flag=1
+         if (p1%pos(2).lt.this%cfg%y(this%cfg%jmin).or.p1%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) p1%flag=1
+         if (p1%pos(3).lt.this%cfg%z(this%cfg%kmin).or.p1%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) p1%flag=1
+         ! Relocalize the particle
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
+         ! Copy back to the particle
+         this%p(i)=p1
+         ! Count number of particles removed
+         if (p1%flag.eq.1) this%np_out=this%np_out+1
+      end do
+   end do
+
+   ! Communicate particles
+   call this%sync()
+
+   ! Sum up particles removed
+   call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+   ! Cleanup
+   if (allocated(npic)) deallocate(npic)
+   if (allocated(ipic)) deallocate(ipic)
+
+   ! Log/screen output
+   logging: block
+     use, intrinsic :: iso_fortran_env, only: output_unit
+     use param,    only: verbose
+     use messager, only: log
+     use string,   only: str_long
+     character(len=str_long) :: message
+     if (this%cfg%amRoot) then
+        write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+        if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+        if (verbose.gt.0) call log(message)
+     end if
+   end block logging
+
+ contains
+
+  function kernel(d,h)
+    implicit none
+    real(WP), intent(in) :: d,h
+    real(WP) :: kernel
+    real(WP) :: q
+    q=d/h
+    kernel = 0.0_WP
+    if (q.ge.0.0_WP .and. q.lt.1.0_WP) then
+       kernel = 1.0_WP-1.5_WP*q**2+0.75_WP*q**3
+    elseif (q.ge.1.0_WP .and. q.lt.2.0_WP) then
+       kernel = 0.25_WP*(2.0_WP-q)**3
+    end if
+  end function kernel
+
+   ! Gradient of the smoothing kernel (not normalized)
+  function gradW(d,h,x1,x2)
+    implicit none
+    real(WP), dimension(3), intent(in) :: x1,x2
+    real(WP), intent(in) :: d,h
+    real(WP), dimension(3) :: gradW
+    real(WP) :: q,dWdr
+    q = d/h
+    dWdr = 0.0_WP
+    if (q.ge.0.0_WP .and. q.lt.1.0_WP) then
+       dWdr = -0.75_WP/h*(4.0_WP*q-3.0_WP*q**2)
+    elseif (q.ge.1.0_WP .and. q.lt.2.0_WP) then
+       dWdr = -0.75_WP/h*(2.0_WP-q)**2
+    end if
+    gradW = dWdr*(x1-x2)/d
+  end function gradW
    
  end subroutine advance_scrw_tracer
+
+ !> Advance the particle equations by a specified time step dt
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+ subroutine advance_crw_tracer(this,dt,U,V,W,rho,sgs_visc)
+   use mpi_f08,    only: MPI_SUM,MPI_INTEGER
+   use mathtools,  only: Pi,normalize,inverse_matrix
+   use random,     only: random_normal
+   use messager,   only: die
+   implicit none
+   class(lpt), intent(inout) :: this
+   real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(3) :: b_ij,driftsum,usj
+   integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
+   real(WP) :: rmydt,mydt,dt_done,sumW,unorm,gamma,tmp
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
+   type(part) :: pold,p1,p2
+
+   ! Zero out number of particles removed
+   this%np_out=0
+
+   ! Share particles across overlap
+   no = this%cfg%no
+   call this%share(no)
+
+   do i=1,this%np_
+      ! Avoid particles with id=0
+      if (this%p(i)%id.eq.0) cycle
+      ! Time-integrate until dt_done=dt
+      dt_done=0.0_WP
+      
+      do while (dt_done.lt.dt)
+         ! Decide the timestep size
+         ! mydt=min(this%p(i)%dt,dt-dt_done)
+         mydt=dt
+         rmydt=sqrt(mydt)
+         ! Remember the particle
+         pold=this%p(i)
+         p1=this%p(i)
+         ! Advance with Euler prediction
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos + 0.5_WP*mydt*(p1%vel + p1%us)
+
+         call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
+         call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
+         p1%dW=b*[random_normal(m=0.0_WP,sd=rmydt),&
+              &   random_normal(m=0.0_WP,sd=rmydt),&
+              &   random_normal(m=0.0_WP,sd=rmydt)]
+
+         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + p1%dW(1) 
+         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + p1%dW(2)
+         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + p1%dW(3)
+
+         p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
+         p1%pos=pold%pos + mydt*(p1%vel + p1%us)
+
+         ! Stochastic update
+         p1%us(1) = tmp1
+         p1%us(2) = tmp2
+         p1%us(3) = tmp3
+
+         ! Relocalize
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
+         ! Increment
+         dt_done=dt_done+mydt
+
+         ! Spectral reflection with walls
+         wall_col: block
+           use mathtools, only: Pi,normalize
+           real(WP) :: d12
+           real(WP), dimension(3) :: n12,Un
+           if (this%cfg%VF(p1%ind(1),p1%ind(2),p1%ind(3)).le.0.0_WP) then
+              d12=this%cfg%get_scalar(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),S=this%Wdist,bc='d')
+              n12=this%Wnorm(:,p1%ind(1),p1%ind(2),p1%ind(3))
+              n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+              p1%pos=p1%pos-2.0_WP*d12*n12
+              Un=sum(p1%vel*n12)*n12
+              p1%vel=p1%vel-2.0_WP*Un
+           end if
+         end block wall_col
+         ! Correct the position to take into account periodicity
+         if (this%cfg%xper) p1%pos(1)=this%cfg%x(this%cfg%imin)+modulo(p1%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+         if (this%cfg%yper) p1%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(p1%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+         if (this%cfg%zper) p1%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(p1%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+         ! Handle particles that have left the domain
+         if (p1%pos(1).lt.this%cfg%x(this%cfg%imin).or.p1%pos(1).gt.this%cfg%x(this%cfg%imax+1)) p1%flag=1
+         if (p1%pos(2).lt.this%cfg%y(this%cfg%jmin).or.p1%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) p1%flag=1
+         if (p1%pos(3).lt.this%cfg%z(this%cfg%kmin).or.p1%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) p1%flag=1
+         ! Relocalize the particle
+         p1%ind=this%cfg%get_ijk_global(p1%pos,p1%ind)
+         ! Copy back to the particle
+         this%p(i)=p1
+         ! Count number of particles removed
+         if (p1%flag.eq.1) this%np_out=this%np_out+1
+      end do
+   end do
+
+   ! Communicate particles
+   call this%sync()
+
+   ! Sum up particles removed
+   call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+   ! Log/screen output
+   logging: block
+     use, intrinsic :: iso_fortran_env, only: output_unit
+     use param,    only: verbose
+     use messager, only: log
+     use string,   only: str_long
+     character(len=str_long) :: message
+     if (this%cfg%amRoot) then
+        write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+        if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+        if (verbose.gt.0) call log(message)
+     end if
+   end block logging
+
+ end subroutine advance_crw_tracer
 
 
  subroutine correlation_function(this, r, rho_ij)
@@ -845,7 +1476,7 @@ contains
    real(WP), intent(inout) :: rho_ij
    real(WP) :: Rc, sig
 
-   Rc=0.1_WP
+   Rc=this%cfg%min_meshsize
    sig = 2.0_WP*0.17_WP**2
    select case(this%corr_type)
    case(1)
@@ -858,6 +1489,8 @@ contains
       end if
    case(3)
       rho_ij = EXP(-0.5_WP * r**2 / Rc**2)
+   case(4)
+      rho_ij = 1.0_WP / (1.0_WP + 5000.0_WP * r**2)
    case default
       rho_ij = 1.0_WP
    end select
@@ -925,6 +1558,23 @@ contains
           myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Increment
           dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
+            end if
+          end block wall_col
        end do
        ! Correct the position to take into account periodicity
        if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
@@ -970,7 +1620,8 @@ contains
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
   subroutine advance_crw(this,dt,U,V,W,rho,visc,sgs_visc)
-    use mpi_f08, only : MPI_SUM,MPI_INTEGER
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+    use parallel, only: MPI_REAL_WP
     use mathtools, only: Pi
     use random, only: random_normal
     implicit none
@@ -990,6 +1641,8 @@ contains
 
     ! Zero out number of particles removed
     this%np_out=0
+    ! Zero out wall collision counter
+    this%ncol=0
 
     ! Advance the equations
     do i=1,this%np_
@@ -1033,6 +1686,23 @@ contains
           myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Increment
           dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
+            end if
+          end block wall_col
        end do
        ! Correct the position to take into account periodicity
        if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
@@ -1049,6 +1719,15 @@ contains
        ! Copy back to particle
        if (myp%id.ne.-1) this%p(i)=myp
     end do
+    
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%meanUn,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+    if (this%ncol.ne.0) then
+       this%meanUn=this%meanUn/this%ncol
+    else
+       this%meanUn=0.0_WP
+    end if
 
     ! Communicate particles
     call this%sync()
@@ -1072,6 +1751,194 @@ contains
 
   end subroutine advance_crw
 
+  !> Advance the particle equations by a specified time step dt
+  !  using a continuous random walk model with well-mixed preserving drift
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+  subroutine advance_crw_anisotropic(this,dt,U,V,W,rho,visc,sgs_visc,gradu,taudiv,uiuj)
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+    use parallel, only: MPI_REAL_WP
+    use mathtools, only: Pi
+    use random, only: random_normal
+    implicit none
+    class(lpt), intent(inout) :: this
+    real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:)   , intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: taudiv    !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: uiuj      !< Reynolds stress
+    real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradu  !< Velocity gradient
+    real(WP), dimension(3) :: acc,tau,gux,guy,guz
+    integer :: i,ierr
+    real(WP) :: rmydt,mydt,dt_done
+    real(WP) :: gu11,gu12,gu13,gu21,gu22,gu23,gu31,gu32,gu33
+    real(WP) :: ux2,uy2,uz2,uxuy
+    real(WP) :: taux,tauy,tauz
+    real(WP) :: a 
+    real(WP), dimension(3,3) :: b_anisotropic
+    type(part) :: myp,pold
+
+    ! Zero out number of particles removed
+    this%np_out=0
+    this%ncol=0.0_WP
+    this%meanUn=0.0_WP
+
+    ! Advance the equations
+    do i=1,this%np_
+       ! Avoid particles with id=0
+       if (this%p(i)%id.eq.0) cycle
+       ! Create local copy of particle
+       myp=this%p(i)
+       ! Time-integrate until dt_done=dt
+       dt_done=0.0_WP
+       do while (dt_done.lt.dt)
+          ! Decide the timestep size
+          mydt=min(myp%dt,dt-dt_done)
+          rmydt=sqrt(mydt)
+          ! Remember the particle
+          pold=myp
+
+          ! Advance with Euler prediction
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+0.5_WP*mydt*myp%vel
+          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
+
+          ! Get drift coefficient
+          call this%get_drift(p=myp,rho=rho,sgs_visc=sgs_visc,a=a)
+         
+          ! Compute Wiener increment
+          myp%dW = [random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP)]
+         
+          ! Correct with midpoint rule
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+mydt*myp%vel
+          myp%vel=pold%vel+mydt*(acc+this%gravity)
+          
+          ! Relocalize
+          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+
+          !> Interpolate divergence of SGS stress tensor to particle location
+          taux = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=taudiv(1,:,:,:),bc='n')
+          tauy = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=taudiv(2,:,:,:),bc='n')
+          tauz = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=taudiv(3,:,:,:),bc='n')
+
+          !> Interpolate the velocity gradient tensor to the particle location
+          gu11 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,1,:,:,:),bc='n')
+          gu12 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,2,:,:,:),bc='n')
+          gu13 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,3,:,:,:),bc='n')
+          gu21 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,1,:,:,:),bc='n')
+          gu22 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,2,:,:,:),bc='n')
+          gu23 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,3,:,:,:),bc='n')
+          gu31 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,1,:,:,:),bc='n')
+          gu32 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,2,:,:,:),bc='n')
+          gu33 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,3,:,:,:),bc='n')
+         
+          gux = [gu11,gu21,gu31]
+          guy = [gu12,gu22,gu32]
+          guz = [gu13,gu23,gu33]
+
+          ! Interpolate the Reynolds stress to the particle location
+          ux2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(1,:,:,:),bc='n')
+          uy2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(2,:,:,:),bc='n')
+          uz2  = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(3,:,:,:),bc='n')
+          uxuy = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=uiuj(4,:,:,:),bc='n')
+          print *, "pos  :: ", myp%pos(1), myp%pos(2), myp%pos(3)
+          print *, "uxuy :: ", uxuy
+          print *, "ux2  :: ", ux2
+
+          b_anisotropic = 0.0_WP
+          ! Knorps & Pozorski (2021)
+          b_anisotropic(1,1) = sqrt(2.0_WP * a) * sqrt(ux2 - uxuy**2 / uy2)
+          b_anisotropic(2,1) = sqrt(2.0_WP * a) * uxuy / sqrt(uy2)
+          b_anisotropic(2,2) = sqrt(2.0_WP * a) * sqrt(uy2)
+          b_anisotropic(3,3) = sqrt(2.0_WP * a) * sqrt(uz2)
+
+          ! Cholesky decomp of uiuj
+          !b_anisotropic(1,1) = sqrt(2.0_WP * a) * sqrt(ux2)
+          !b_anisotropic(2,1) = sqrt(2.0_WP * a) * uxuy / sqrt(ux2)
+          !b_anisotropic(2,2) = sqrt(2.0_WP * a) * sqrt(uy2 - uxuy**2 / ux2)
+          !b_anisotropic(3,3) = sqrt(2.0_WP * a) * sqrt(uz2)
+
+          ! du = [(u \cdot \nabla) <U> + \nabla \cdot \tau] dt + G_ij u dt + B dW
+          myp%Us(1) = (-dot_product(myp%Us(:),gux) + taux)*mydt + (1.0_WP - a*mydt)*myp%Us(1) + &
+                        & dot_product(b_anisotropic(1,:),myp%dW)*rmydt
+          myp%Us(2) = (-dot_product(myp%Us(:),guy) + tauy)*mydt + (1.0_WP - a*mydt)*myp%Us(2) + & 
+                        & dot_product(b_anisotropic(2,:),myp%dW)*rmydt
+          myp%Us(3) = (-dot_product(myp%Us(:),guz) + tauz)*mydt + (1.0_WP - a*mydt)*myp%Us(3) + &
+                        & dot_product(b_anisotropic(3,:),myp%dW)*rmydt
+
+          ! Increment
+          dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then !.or.myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) then
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+               this%meanUn=this%meanUn+ABS(Un)
+            end if
+          end block wall_col
+       end do
+       ! Correct the position to take into account periodicity
+       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       ! Handle particles that have left the domain
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       ! Relocalize the particle
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       ! Count number of particles removed
+       if (myp%flag.eq.1) this%np_out=this%np_out+1
+       ! Copy back to particle
+       if (myp%id.ne.-1) this%p(i)=myp
+    end do
+
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%ncol,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr)
+    call MPI_ALLREDUCE(MPI_IN_PLACE,this%meanUn,3,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+
+    if (this%ncol.ne.0) then
+       this%meanUn=this%meanUn/this%ncol
+    else
+       this%meanUn=0.0_WP
+    end if
+
+    ! Communicate particles
+    call this%sync()
+
+    ! Sum up particles removed
+    call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+    ! Log/screen output
+    logging: block
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use param,    only: verbose
+      use messager, only: log
+      use string,   only: str_long
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+         if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+         if (verbose.gt.0) call log(message)
+      end if
+    end block logging
+
+  end subroutine advance_crw_anisotropic
 
   !> Advance the particle equations by a specified time step dt
   !  using a continuous random walk model with well-mixed preserving drift
@@ -1164,6 +2031,21 @@ contains
           myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
           ! Increment
           dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
+               d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
+               Un=sum(this%p(i)%vel*n12)*n12
+               this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+            end if
+          end block wall_col
        end do
        ! Correct the position to take into account periodicity
        if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
@@ -1202,6 +2084,167 @@ contains
     end block logging
 
   end subroutine advance_crw_fede
+
+  !> Advance the particle equations by a specified time step dt
+  !  using a continuous random walk model with well-mixed preserving drift
+  !> p%id=0 => no coll, no solve
+  !> p%id=-1=> no coll, no move
+  subroutine advance_crw_normalized(this,dt,U,V,W,rho,visc,sgs_visc,gradu,dtaurdx,dtaurdy,dtaurdz)
+    use mpi_f08, only : MPI_SUM,MPI_INTEGER
+    use mathtools, only: Pi
+    use random, only: random_normal
+    implicit none
+    class(lpt), intent(inout) :: this
+    real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtaurdx   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtaurdy   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: dtaurdz   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(1:,1:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradu !< Velocity gradient
+    real(WP), dimension(3) :: acc,tau,gux,guy,guz,rms_new,rms_old
+    integer :: i,ierr
+    real(WP) :: rmydt,mydt,dt_done
+    real(WP) :: gu11,gu12,gu13,gu21,gu22,gu23,gu31,gu32,gu33
+    real(WP) :: a,b,tke    ! Coefficients of OU process 
+    type(part) :: myp,pold
+
+    ! Zero out number of particles removed
+    this%np_out=0
+
+    ! Advance the equations
+    do i=1,this%np_
+       ! Avoid particles with id=0
+       if (this%p(i)%id.eq.0) cycle
+       ! Create local copy of particle
+       myp=this%p(i)
+       ! Time-integrate until dt_done=dt
+       dt_done=0.0_WP
+       do while (dt_done.lt.dt)
+          ! Decide the timestep size
+          mydt=min(myp%dt,dt-dt_done)
+          rmydt=sqrt(mydt)
+          ! Remember the particle
+          pold=myp
+
+          ! Advance with Euler prediction
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+0.5_WP*mydt*myp%vel
+          myp%vel=pold%vel+0.5_WP*mydt*(acc+this%gravity)
+
+          ! Get diffusion coefficient
+          call this%get_diffusion_crw(p=myp,rho=rho,sgs_visc=sgs_visc,b=b)
+          call this%get_drift(p=myp,rho=rho,sgs_visc=sgs_visc,a=a)
+         
+          ! Compute Wiener increment
+          myp%dW = [random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP), &
+                    random_normal(m=0.0_WP,sd=1.0_WP)]
+         
+          ! Correct with midpoint rule
+          call this%get_rhs(U=U,V=V,W=W,rho=rho,visc=visc,p=myp,acc=acc,opt_dt=myp%dt)
+          myp%pos=pold%pos+mydt*myp%vel
+          myp%vel=pold%vel+mydt*(acc+this%gravity)
+
+          !> Interpolate divergence of SGS stress tensor to particle location
+          tau = this%cfg%get_velocity(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),U=dtaurdx,V=dtaurdy,W=dtaurdz)    
+
+          !> Interpolate the velocity gradient tensor to the particle location
+          gu11 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,1,:,:,:),bc='n')
+          gu12 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,2,:,:,:),bc='n')
+          gu13 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(1,3,:,:,:),bc='n')
+          gu21 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,1,:,:,:),bc='n')
+          gu22 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,2,:,:,:),bc='n')
+          gu23 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(2,3,:,:,:),bc='n')
+          gu31 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,1,:,:,:),bc='n')
+          gu32 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,2,:,:,:),bc='n')
+          gu33 = this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=gradu(3,3,:,:,:),bc='n')
+          
+          gux = [gu11,gu21,gu31]
+          guy = [gu12,gu22,gu32]
+          guz = [gu13,gu23,gu33]
+
+          ! TODO: 
+          ! - Get y+ during runtime
+          ! - Implement y+ RMS profile (It's for RANS... scale w/ subgrid estimate instead?)
+          ! - Implement y+ tau corrections for near-wall drift
+          ! NOTE: Bons masters thesis - profiles end at y+=100
+
+          !! u/s = u/s + [dsdy - u/(s*tau)]*dt + sqrt(2/tau)*dW
+          myp%Us(1) = (-dot_product(myp%Us(:),gux) + tau(1))*mydt + (1.0_WP - a*mydt)*myp%Us(1) + b*myp%dW(1)*rmydt
+          myp%Us(2) = (-dot_product(myp%Us(:),guy) + tau(2))*mydt + (1.0_WP - a*mydt)*myp%Us(2) + b*myp%dW(2)*rmydt
+          myp%Us(3) = (-dot_product(myp%Us(:),guz) + tau(3))*mydt + (1.0_WP - a*mydt)*myp%Us(3) + b*myp%dW(3)*rmydt
+
+          ! Get RMS at step (n) and (n+1)
+          call this%get_tke(p=pold, rho=rho, sgs_visc=sgs_visc, tke=tke)
+          rms_old = sqrt(2.0_WP / 3.0_WP * tke)
+          call this%get_tke(p=myp , rho=rho, sgs_visc=sgs_visc, tke=tke)
+          rms_new = sqrt(2.0_WP / 3.0_WP * tke)
+
+          ! Normalize then scale with RMS at new location
+          myp%Us = rms_new * myp%Us / rms_old
+
+          ! Relocalize
+          myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+          ! Increment
+          dt_done=dt_done+mydt
+
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3)).le.0.0_WP) then
+               d12=this%cfg%get_scalar(pos=this%p(i)%pos,i0=this%p(i)%ind(1),j0=this%p(i)%ind(2),k0=this%p(i)%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,this%p(i)%ind(1),this%p(i)%ind(2),this%p(i)%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               this%p(i)%pos=this%p(i)%pos-2.0_WP*d12*n12
+               Un=sum(this%p(i)%vel*n12)*n12
+               this%p(i)%vel=this%p(i)%vel-2.0_WP*Un
+            end if
+          end block wall_col
+       end do
+       ! Correct the position to take into account periodicity
+       if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
+       if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
+       if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
+       ! Handle particles that have left the domain
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       ! Relocalize the particle
+       myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
+       ! Count number of particles removed
+       if (myp%flag.eq.1) this%np_out=this%np_out+1
+       ! Copy back to particle
+       if (myp%id.ne.-1) this%p(i)=myp
+    end do
+
+    ! Communicate particles
+    call this%sync()
+
+    ! Sum up particles removed
+    call MPI_ALLREDUCE(this%np_out,i,1,MPI_INTEGER,MPI_SUM,this%cfg%comm,ierr); this%np_out=i
+
+    ! Log/screen output
+    logging: block
+      use, intrinsic :: iso_fortran_env, only: output_unit
+      use param,    only: verbose
+      use messager, only: log
+      use string,   only: str_long
+      character(len=str_long) :: message
+      if (this%cfg%amRoot) then
+         write(message,'("Particle solver [",a,"] on partitioned grid [",a,"]: ",i0," particles were advanced")') trim(this%name),trim(this%cfg%name),this%np
+         if (verbose.gt.1) write(output_unit,'(a)') trim(message)
+         if (verbose.gt.0) call log(message)
+      end if
+    end block logging
+
+  end subroutine advance_crw_normalized
 
   !> Calculate RHS of the particle ODEs
   subroutine get_rhs(this,U,V,W,rho,visc,p,acc,opt_dt)
@@ -1715,10 +2758,16 @@ contains
       if (present(nover)) then
          no=nover
          if (no.gt.this%cfg%no) then
-            call warn('[rand_walk_class share] Specified overlap is larger than that of cfg - reducing no')
+            call die('[randomwalk_class share] Specified overlap is larger than that of cfg - reducing no')
             no=this%cfg%no
          else if (no.le.0) then
-            call die('[rand_walk_class share] Specified overlap cannot be less or equal to zero')
+            call die('[randomwalk_class share] Specified overlap cannot be less or equal to zero')
+         else if (this%cfg%nx.gt.1.and.no.gt.this%cfg%nx_) then
+            call die('[randomwalk_class share] Specified overlap spans multiple procs in x')
+         else if (this%cfg%ny.gt.1.and.no.gt.this%cfg%ny_) then
+            call die('[randomwalk_class share] Specified overlap spans multiple procs in y')
+         else if (this%cfg%nz.gt.1.and.no.gt.this%cfg%nz_) then
+            call die('[randomwalk_class share] Specified overlap spans multiple procs in z')
          end if
       else
          no=1

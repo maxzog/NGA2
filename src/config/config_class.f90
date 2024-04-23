@@ -64,7 +64,9 @@ contains
    !> Single-grid config constructor from NGA grid file
    function construct_from_file(grp,decomp,no,fgrid,fgeom) result(self)
       use mpi_f08, only: MPI_Group
+      use datafile_class, only: datafile
       implicit none
+      type(datafile) :: geomfile
       type(config) :: self
       type(MPI_Group), intent(in) :: grp
       integer, dimension(3), intent(in) :: decomp
@@ -76,9 +78,8 @@ contains
       ! Finish preparing the config
       call self%prep
       ! Read in the VF info
-      read_VF: block
-         use datafile_class, only: datafile
-         type(datafile) :: geomfile
+!! COMMENTED OUT FOR COMPILATION ON CRG2
+!!      read_VF: block
          ! Access the file
          geomfile=datafile(self,fgeom)
          ! Get the VF array
@@ -87,7 +88,7 @@ contains
          call self%VF_extend()
          ! Update fluid_vol
          call self%calc_fluid_vol()
-      end block read_VF
+!!      end block read_VF
    end function construct_from_file
    
    

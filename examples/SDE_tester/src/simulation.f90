@@ -2,7 +2,7 @@
 module simulation
    use precision,         only: WP
    use geometry,          only: cfg
-   use hypre_str_class,   only: hypre_str
+!   use hypre_str_class,   only: hypre_str
    use incomp_class,      only: incomp
    use randomwalk_class,  only: lpt
    use timetracker_class, only: timetracker
@@ -17,7 +17,7 @@ module simulation
    private
    
    !> Single-phase incompressible flow solver, pressure and implicit solvers, and a time tracker
-   type(hypre_str),   public :: ps
+!   type(hypre_str),   public :: ps
    type(incomp),      public :: fs
    type(timetracker), public :: time
    type(lpt),         public :: lp
@@ -126,7 +126,7 @@ contains
 
       ! Create a single-phase flow solver without bconds
       create_and_initialize_flow_solver: block
-         use hypre_str_class, only: pfmg
+!         use hypre_str_class, only: pfmg
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
          ! Assign constant viscosity
@@ -134,12 +134,13 @@ contains
          ! Assign constant density
          call param_read('Density',fs%rho)
          ! Prepare and configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pfmg,nst=7)
-         call fs%setup(pressure_solver=ps)
+!         ps=hypre_str(cfg=cfg,name='Pressure',method=pfmg,nst=7)
+!         call fs%setup(pressure_solver=ps)
       end block create_and_initialize_flow_solver
 
       ! Create an LES model
       create_sgs: block
+<<<<<<< HEAD
          real(WP) :: tke_sgs,sig_sgs,tau_crwi,delta,sgsv
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
@@ -157,6 +158,16 @@ contains
             print *, "TAU :: ", 1/tau_crwi
          end if
 
+=======
+         real(WP) :: tmptke=0.0_WP
+         sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
+         sgs%Cs_ref=0.1_WP
+         sgs%visc=0.005_WP
+         call param_read('Steady-state TKE', tmptke, default=0.0_WP)
+         if (tmptke.gt.0.0_WP) then
+            sgs%visc=fs%rho*fs%cfg%min_meshsize*0.067_WP*sqrt(tmptke)
+         end if
+>>>>>>> f2ab5eb1a72fd9cc64b23f070f1fd593a2240ed1
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -186,8 +197,8 @@ contains
       ! Initialize LPT solver
       initialize_lpt: block
          use random, only: random_uniform, random_normal
-         integer :: i,np
-         real(WP) :: dp
+         integer :: i,np,j
+         real(WP) :: dp,init_rms
          character(len=str_medium) :: timestamp
          ! Create solver
          lp=lpt(cfg=cfg,name='CRW')
@@ -199,6 +210,8 @@ contains
          call param_read('Number of particles',np)
          ! Check if spatially correlated
          call param_read('Correlation function', lp%corr_type)
+         init_rms = (maxval(sgs%visc) / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
+         init_rms = sqrt(2.0_WP / 3.0_WP * init_rms)
          ! Check if a particles should be read in
          ! Root process initializes np particles randomly
          if (lp%cfg%amRoot) then
@@ -215,7 +228,9 @@ contains
                ! Give zero velocity
                lp%p(i)%vel=0.0_WP
                ! OU
-               lp%p(i)%us=0.0_WP
+               lp%p(i)%us=[random_normal(m=0.0_WP,sd=init_rms),&
+               &           random_normal(m=0.0_WP,sd=init_rms),&
+               &           random_normal(m=0.0_WP,sd=init_rms)]
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
@@ -337,15 +352,19 @@ contains
          !> ADVANCE PARTICLES
          wt_lpt%time_in=parallel_time()
          resU=fs%rho; resV=fs%visc-sgs%visc
+<<<<<<< HEAD
          call lp%advance_crw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
        !  call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
        !  call lp%advance_scrw(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV,sgs_visc=sgs%visc)
+=======
+         call lp%advance_scrw_tracer(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,sgs_visc=sgs%visc)
+>>>>>>> f2ab5eb1a72fd9cc64b23f070f1fd593a2240ed1
          wt_lpt%time=wt_lpt%time+parallel_time()-wt_lpt%time_in
          
          !> COMPUTE STATS
          wt_stat%time_in=parallel_time()
          call lp%get_max()
-         if (mod(time%t,0.2_WP).lt.epsilon(1.0_WP)) call compute_pdfs(time%n)
+!!         if (mod(time%t,0.2_WP).lt.epsilon(1.0_WP)) call compute_pdfs(time%n)
          wt_stat%time=wt_stat%time+parallel_time()-wt_stat%time_in
          
          ! Output to ensight

@@ -1,0 +1,44 @@
+# Parallelization
+Partition :	1 4 1
+
+# Mesh definition
+Lx :  6.2832
+nx :	64
+
+# Fluid properties
+Dynamic viscosity :    0.01
+Density :              1
+Linear forcing :       .false.
+
+# Steady-state (forcing) parameters
+Steady-state TKE     : 13.5
+Forcing constant (G) : 50.0
+Force to maximum Re_lambda : .false.
+
+# Particle properties
+Particle density :      1000
+Particle Stokes number : 1.0
+Particle diameter :     5.336E-03 #1.57224E-03
+Number of particles :   100
+Use SCRW :              .true.
+# 4 -> 1 / (1 + c * r^2)
+# 3 -> Weird exponential
+Correlation function :  3
+Interpolate fluid velocity : .false. 
+
+# LES
+Use SGS model : .false.
+SGS model type : 1
+
+# Time integration
+Max timestep size : 1e-3
+Max cfl number :    0.9
+Max iter :          5000 #999999
+Max time :          15
+
+# Ensight output
+Ensight output period : 0.01
+
+# Restart config
+Restart from : #9.00000E+00
+Restart output period : 1.0
