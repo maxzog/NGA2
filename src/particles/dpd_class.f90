@@ -490,7 +490,7 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
    real(WP) :: rmydt,mydt,dt_done,sumW,unorm
-   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,rho_ij,d12,delta
    real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf
    real(WP), dimension(3,3) :: L,Linv
    type(part) :: pold,p1,p2
@@ -729,7 +729,7 @@ contains
    integer, dimension(:,:,:), allocatable :: npic
    integer, dimension(:,:,:,:), allocatable :: ipic
    real(WP) :: rmydt,mydt,dt_done,gamma,tmp,r2i
-   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,rho_ij,d12,delta
    real(WP), dimension(3) :: r1,r2,r12,dW,ur,Fr,Fc,Fd
    type(part) :: pold,p1,p2
 
@@ -739,7 +739,6 @@ contains
    this%np_out=0
 
    do i=1,this%np_
-      call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
       this%p(i)%dW =   [random_normal(m=0.0_WP, sd=1.0_WP), & 
                      &  random_normal(m=0.0_WP, sd=1.0_WP), &
                      &  random_normal(m=0.0_WP, sd=1.0_WP)] 
@@ -818,6 +817,7 @@ contains
          Fr=0.0_WP
          Fd=0.0_WP
          Fc=0.0_WP
+         corrsum=0.0_WP
 
          do kk=p1%ind(3)-no,p1%ind(3)+no
             do jj=p1%ind(2)-no,p1%ind(2)+no
@@ -844,25 +844,25 @@ contains
                      ! Compute relative information
                      r12 = r2-r1
                      d12  = norm2(r12)
-                     call this%correlation_function(r=d12,rho_ij=corrtp)
+                     call this%correlation_function(r=d12,rho_ij=rho_ij)
 
-                     if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
-                        print *, corrtp
+                     if (rho_ij.gt.1.0_WP+epsilon(1.0_WP)) then 
+                        print *, rho_ij
                         call die("[advance] corr > 1")
                      end if
-                     if (corrtp.lt.0.0_WP) then 
-                        print *, corrtp
+                     if (rho_ij.lt.0.0_WP) then 
+                        print *, rho_ij
                         call die("[advance] corr < 0")
                      end if
 
-                     corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
                      if (p1%id.ne.p2%id) then
+                        corrsum = corrsum + rho_ij*rho_ij   ! Kernel normalization
                         ur = dot_product(p2%us-p1%us,r12/d12)*r12/d12
                         dW = r2i*(p1%dW + p2%dW)
                         ! Compute random force
-                        Fr = Fr - dW(1)*corrtp*r12/d12
+                        Fr = Fr - p2%dW*rho_ij!*r12/d12
                         ! Compute dissipative force
-                        Fd = Fd + a * corrtp**2 * (ur + p2%us - p1%us)
+                        Fd = Fd + a*rho_ij**2*(ur + p2%us - p1%us)
                         ! Compute conservative force
                         if (d12.lt.delta) then
                            Fc = Fc - 2.0_WP*(1.0_WP - d12/delta)*r12/d12
@@ -875,14 +875,17 @@ contains
 
          call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
          call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
-
+         corrsum=sqrt(corrsum)
          ! Update single-particle terms and add two-particle DPD terms
          ! tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b_ij(1)/sqrt(corrsum) + driftsum(1)*mydt
          ! tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b_ij(2)/sqrt(corrsum) + driftsum(2)*mydt
          ! tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b_ij(3)/sqrt(corrsum) + driftsum(3)*mydt
-         tmp1 = p1%us(1) + b*Fr(1)*rmydt + (Fd(1) + Fc(1))*mydt
-         tmp2 = p1%us(2) + b*Fr(2)*rmydt + (Fd(2) + Fc(2))*mydt
-         tmp3 = p1%us(3) + b*Fr(3)*rmydt + (Fd(3) + Fc(3))*mydt
+         tmp1 = p1%us(1) - b*Fr(1)*rmydt/corrsum + (Fd(1) + Fc(1))*mydt - a*p1%us(1)*mydt + b*p1%dW(1)*rmydt
+         tmp2 = p1%us(2) - b*Fr(2)*rmydt/corrsum + (Fd(2) + Fc(2))*mydt - a*p1%us(2)*mydt + b*p1%dW(2)*rmydt
+         tmp3 = p1%us(3) - b*Fr(3)*rmydt/corrsum + (Fd(3) + Fc(3))*mydt - a*p1%us(3)*mydt + b*p1%dW(3)*rmydt
+         ! tmp1 = p1%us(1) + b*Fr(1)*rmydt + (Fd(1) + Fc(1))*mydt
+         ! tmp2 = p1%us(2) + b*Fr(2)*rmydt + (Fd(2) + Fc(2))*mydt
+         ! tmp3 = p1%us(3) + b*Fr(3)*rmydt + (Fd(3) + Fc(3))*mydt
 
          p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
          p1%pos=pold%pos + mydt*(p1%vel + p1%us)

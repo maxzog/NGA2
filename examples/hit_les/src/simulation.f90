@@ -205,14 +205,14 @@ contains
         end if
       end block restart_and_save
 
-      ! Revisit timetracker to adjust time and time step values if this is a restart
-      update_timetracker: block
-         if (restarted) then
-            call df%pullval(name='t' ,val=time%t )
-            call df%pullval(name='dt',val=time%dt)
-            time%told=time%t-time%dt
-         end if
-      end block update_timetracker
+!!      ! Revisit timetracker to adjust time and time step values if this is a restart
+!!      update_timetracker: block
+!!         if (restarted) then
+!!            call df%pullval(name='t' ,val=time%t )
+!!            call df%pullval(name='dt',val=time%dt)
+!!            time%told=time%t-time%dt
+!!         end if
+!!      end block update_timetracker
 
       ! Initialize timers
       initialize_timers: block
@@ -252,9 +252,9 @@ contains
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
          if (restarted) then
-            call df%pullvar(name='LM'  ,var=sgs%LM)
-            call df%pullvar(name='MM'  ,var=sgs%MM)
-            call df%pullvar(name='visc',var=sgs%visc)
+!!            call df%pullvar(name='LM'  ,var=sgs%LM)
+!!            call df%pullvar(name='MM'  ,var=sgs%MM)
+!!            call df%pullvar(name='visc',var=sgs%visc)
          end if
       end block create_sgs
 
@@ -362,6 +362,8 @@ contains
          call param_read('Particle Stokes number', stk)
          ! Get number of particles
          call param_read('Number of particles',np)
+         ! Check if spatially correlated
+         call param_read('Correlation function', lp%corr_type)
          ! Check if a stochastic SGS model is used
          if (.false.) then
             call param_read('Restart from',timestamp,'r')
@@ -406,16 +408,18 @@ contains
       create_pmesh: block
          integer :: np,i
          call param_read('Number of particles',np)
-         pmesh=partmesh(nvar=1,nvec=2,name='lpt')
+         pmesh=partmesh(nvar=1,nvec=3,name='lpt')
          pmesh%varname(1)="id"
          pmesh%vecname(1)="vel"
          pmesh%vecname(2)="fld"
+         pmesh%vecname(3)="uf"
          call lp%resize(np)
          call lp%update_partmesh(pmesh)
          do i = 1,lp%np_
             pmesh%var(1,i) = lp%p(i)%id
             pmesh%vec(:,1,i) = lp%p(i)%vel
             pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+            pmesh%vec(:,3,i) = lp%p(i)%us
          end do
       end block create_pmesh
       
@@ -712,6 +716,7 @@ contains
                pmesh%var(1,ii) = lp%p(ii)%id
                pmesh%vec(:,1,ii) = lp%p(ii)%vel
                pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+               pmesh%vec(:,3,ii) = lp%p(ii)%us
             end do
             call ens_out%write_data(time%t)
          end if
@@ -755,12 +760,15 @@ contains
               ! Prepare a new directory
               if (fs%cfg%amRoot) call execute_command_line('mkdir -p restart')
               ! Populate df and write it
-              call df%pushval(name='t' ,val=time%t     )
-              call df%pushval(name='dt',val=time%dt    )
-              call df%pushvar(name='U' ,var=fs%U       )
-              call df%pushvar(name='V' ,var=fs%V       )
-              call df%pushvar(name='W' ,var=fs%W       )
-              call df%pushvar(name='P' ,var=fs%P       )
+              call df%pushval(name='t'   ,val=time%t  )
+              call df%pushval(name='dt'  ,val=time%dt )
+              call df%pushvar(name='U'   ,var=fs%U    )
+              call df%pushvar(name='V'   ,var=fs%V    )
+              call df%pushvar(name='W'   ,var=fs%W    )
+              call df%pushvar(name='P'   ,var=fs%P    )
+              call df%pushvar(name='LM'  ,var=sgs%LM  )
+              call df%pushvar(name='MM'  ,var=sgs%MM  )
+              call df%pushvar(name='visc',var=sgs%visc)
               call df%write(fdata='restart/data_'//trim(adjustl(timestamp)))
               ! Write particle file
               call lp%write(filename='restart/part_'//trim(adjustl(timestamp)))

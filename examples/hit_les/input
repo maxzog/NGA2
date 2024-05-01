@@ -25,17 +25,18 @@ SGS model type : 1
 # Particle properties
 Particle density :     1000
 Particle Stokes number :    1.0
-Number of particles :  150000 #10000 # 250000
-Use CRW :              .false.
+Number of particles :  250000 #10000 # 250000
+Correlation function : 3
 
 # Time integration
 Max timestep size : 1e-3
 Max cfl number :    0.9
 Max iter :          12500
+Max time :          10.0
 
 # Ensight output
 Ensight output period : 0.1
 
 # Restart config
-Restart from : init # data_les32 
-Restart output period : 1.0
+Restart from : les32 #init # data_les32 
+Restart output period : 5.0
