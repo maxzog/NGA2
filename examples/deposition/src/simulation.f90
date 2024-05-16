@@ -525,7 +525,7 @@ contains
                do while (dt_done.lt.time%dtmid)
                   ! Get timestep
                   mydt=min(lp_dt,time%dtmid-dt_done)
-                  call lp%collide(dt=mydt)
+!                  call lp%collide(dt=mydt)
                   call lp%advance(dt=mydt,U=fs%U,V=fs%V,W=fs%W,rho=rho0,visc=fs%visc,stress_x=resU,stress_y=resV,stress_z=resW,&
                   &    srcU=tmp1,srcV=tmp2,srcW=tmp3)
                   srcUlp=srcUlp+tmp1
@@ -582,11 +582,34 @@ contains
                call fs%cfg%sync(resW)
             end block add_lpt_source
 
-            ! Add body forcing
+!            ! Add body forcing
+!            forcing: block
+!               mfr=get_bodyforce_mfr(resU)
+!               bforce=(mfr_target-mfr)/time%dtmid
+!               resU=resU+time%dtmid*bforce
+!            end block forcing
+
+!            ! Add body forcing
             forcing: block
-               mfr=get_bodyforce_mfr(resU)
-               bforce=(mfr_target-mfr)/time%dtmid
-               resU=resU+time%dtmid*bforce
+               use mpi_f08,  only: MPI_SUM,MPI_ALLREDUCE
+               use parallel, only: MPI_REAL_WP
+               integer :: i,j,k,ierr
+               real(WP) :: myU,myUvol,Uvol
+               myU=0.0_WP; myUvol=0.0_WP
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        if (fs%umask(i,j,k).eq.0) then
+                           myU   =myU   +fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*(2.0_WP*fs%rhoU(i,j,k)-fs%rhoUold(i,j,k))
+                           myUvol=myUvol+fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+                        end if
+                     end do
+                  end do
+               end do
+               call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+               call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanU=meanU/Uvol
+               bforce=rho*Ubulk-meanU
+               where (fs%umask.eq.0) resU=resU+bforce
             end block forcing
 
             ! Form implicit residuals
