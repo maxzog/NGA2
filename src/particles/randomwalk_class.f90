@@ -1206,8 +1206,7 @@ contains
 !!               end do
 !!            end do
 !!         end do
-
-!!         driftsum=0.0_WP
+         driftsum=0.0_WP
          call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
          call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
 

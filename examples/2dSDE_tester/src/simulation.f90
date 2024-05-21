@@ -4,7 +4,7 @@ module simulation
    use geometry,          only: cfg
    use incomp_class,      only: incomp
 !!   use randomwalk_class,  only: lpt
-   use dpd_class,         only: lpt
+   use randomwalk_class,         only: lpt
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
    use partmesh_class,    only: partmesh

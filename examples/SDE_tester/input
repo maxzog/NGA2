@@ -12,11 +12,11 @@ Density :              1
 # Particle properties
 Steady-state TKE :      1.42
 Particle density :      1000
-Particle diameter :     5.336E-03 #1.57224E-03
-Number of particles :   250000
+Particle diameter :     0 #5.336E-03 #1.57224E-03
+Number of particles :   500000
 # 4 -> 1 / (1 + c * r^2)
 # 3 -> Weird exponential
-Correlation function :  5
+Correlation function :  3
 
 # LES
 Use SGS model : .false.
