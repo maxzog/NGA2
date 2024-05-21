@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 8 8 
+Partition :	1 8 8  
 
 # Mesh definition
 Lx :	1.25664
@@ -16,25 +16,25 @@ Density :             1.3
 Ubulk : 0.36
 Wbulk : 0
 Perturbation : 0.25
-Gravity : 0 -9.81 0
+Gravity : 0 0 0
 
 # Particles
 Particle timestep size     : 1e-3
 Collision timescale        : 15e-6
 Particle volume fraction   : 0.0004
-Particle diameter          : 1.5e-3
-Particle u velocity        : 0.8
+Particle diameter          : 0.0003952912
+Particle u velocity        : 0.36
 Particle fluctuations      : 0.1
 Particle density           : 1300
 Coefficient of restitution : 0.8
 Friction coefficient       : 0.1
 
 # Time integration
-Max timestep size : 0.0163 # dt = 0.06 * \frac{u_\tau}{\delta_{\nu}}
+Max timestep size : 0.001658 # dt = 0.06 * \frac{\nu}{u_{\tau}^2} 
 Max cfl number :    0.9
 
 # Ensight output
-Ensight output period :  0.5
+Ensight output period :  0.05
 Postproc output period : 50
 Restart output period : 5
 Restart from : steady #fine

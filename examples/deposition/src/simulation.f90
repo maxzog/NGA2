@@ -33,7 +33,7 @@ module simulation
    type(event) :: save_evt
 
    !> Simulation monitor file
-   type(monitor) :: mfile,cflfile,forcefile
+   type(monitor) :: mfile,cflfile,forcefile,lptfile
 
    public :: simulation_init,simulation_run,simulation_final
 
@@ -130,7 +130,8 @@ contains
       end do
       ! If root, print it out
       if (fs%cfg%amRoot) then
-         filename='Uavg_'
+         call execute_command_line('mkdir -p outs')
+         filename='./outs/Uavg_'
          write(timestamp,'(es12.5)') time%t
          open(newunit=iunit,file=trim(adjustl(filename))//trim(adjustl(timestamp)),form='formatted',status='replace',access='stream',iostat=ierr)
          write(iunit,'(a12,3x,a12)') 'Height','Uavg'
@@ -234,7 +235,7 @@ contains
          fs=lowmach(cfg=cfg,name='NS solver')
          ! Define boundary conditions
          call fs%add_bcond(name='bottom',type=dirichlet,locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='top',type=dirichlet,locator=top_of_domain,face='y',dir=+1,canCorrect=.true. )
+         call fs%add_bcond(name='top',type=dirichlet,locator=top_of_domain,face='y',dir=+1,canCorrect=.false. )
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -362,6 +363,21 @@ contains
         call lp%update_VF()
       end block initialize_lpt
 
+      ! Create partmesh object for Lagrangian particle output
+      create_pmesh: block
+         integer :: np,i
+         pmesh=partmesh(nvar=1,nvec=2,name='lpt')
+         pmesh%varname(1)="id"
+         pmesh%vecname(1)="vel"
+         pmesh%vecname(2)="fld"
+         call lp%update_partmesh(pmesh)
+         do i = 1,lp%np_
+            pmesh%var(1,i) = lp%p(i)%id
+            pmesh%vec(:,1,i) = lp%p(i)%vel
+            pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
+         end do
+      end block create_pmesh
+
       initialize_flow: block
          use lowmach_class,   only: dirichlet, bcond
          use mathtools, only: Pi,twoPi
@@ -433,6 +449,7 @@ contains
          ! Add variables to output
          call ens_out%add_vector('velocity',Ui,Vi,Wi)
          call ens_out%add_scalar('viscosity',fs%visc)
+         call ens_out%add_particle('particles',pmesh)
          ! Output to ensight
          if (ens_evt%occurs()) call ens_out%write_data(time%t)
       end block create_ensight
@@ -475,6 +492,26 @@ contains
          call forcefile%add_column(meanU,'Bulk U')
          call forcefile%add_column(meanW,'Bulk W')
          call forcefile%write()
+         ! Create LPT monitor
+         call lp%get_max()
+         lptfile=monitor(amroot=lp%cfg%amRoot,name='lpt')
+         call lptfile%add_column(time%n,'Timestep number')
+         call lptfile%add_column(time%t,'Time')
+         call lptfile%add_column(lp_dt,'Particle dt')
+         call lptfile%add_column(lp%VFmean,'VFp mean')
+         call lptfile%add_column(lp%VFmax,'VFp max')
+         call lptfile%add_column(lp%VFvar,'VFp var')
+         call lptfile%add_column(lp%np,'Particle number')
+         call lptfile%add_column(lp%ncol,'Collision number')
+         call lptfile%add_column(lp%Umin,'Particle Umin')
+         call lptfile%add_column(lp%Umax,'Particle Umax')
+         call lptfile%add_column(lp%Vmin,'Particle Vmin')
+         call lptfile%add_column(lp%Vmax,'Particle Vmax')
+         call lptfile%add_column(lp%Wmin,'Particle Wmin')
+         call lptfile%add_column(lp%Wmax,'Particle Wmax')
+         call lptfile%add_column(lp%dmin,'Particle dmin')
+         call lptfile%add_column(lp%dmax,'Particle dmax')
+         call lptfile%write()
       end block create_monitor
 
 
@@ -588,6 +625,7 @@ contains
 !               bforce=(mfr_target-mfr)/time%dtmid
 !               resU=resU+time%dtmid*bforce
 !            end block forcing
+            call fs%rho_multiply()
 
 !            ! Add body forcing
             forcing: block
@@ -610,6 +648,18 @@ contains
                call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanU=meanU/Uvol
                bforce=rho*Ubulk-meanU
                where (fs%umask.eq.0) resU=resU+bforce
+               do k=fs%cfg%kmin_,fs%cfg%kmax_
+                  do j=fs%cfg%jmin_,fs%cfg%jmax_
+                     do i=fs%cfg%imin_,fs%cfg%imax_
+                        if (fs%umask(i,j,k).eq.0) then
+                           myU   =myU   +fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)*(2.0_WP*fs%U(i,j,k)-fs%Uold(i,j,k))
+                           myUvol=myUvol+fs%cfg%dxm(i)*fs%cfg%dy(j)*fs%cfg%dz(k)
+                        end if
+                     end do
+                  end do
+               end do
+               call MPI_ALLREDUCE(myUvol,Uvol ,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr)
+               call MPI_ALLREDUCE(myU   ,meanU,1,MPI_REAL_WP,MPI_SUM,fs%cfg%comm,ierr); meanU=meanU/Uvol
             end block forcing
 
             ! Form implicit residuals
@@ -621,8 +671,8 @@ contains
             fs%W=2.0_WP*fs%W-fs%Wold+resW
 
             ! Apply other boundary conditions on the resulting fields
-            call fs%apply_bcond(time%t,time%dt)
             call fs%rho_multiply()
+            call fs%apply_bcond(time%t,time%dt)
 
             ! Reset Dirichlet BCs
             dirichlet_velocity: block
@@ -633,18 +683,20 @@ contains
               do n=1,mybc%itr%no_
                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                  fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
+                 fs%rhoU(i,j,k)=0.0_WP; fs%rhoV(i,j,k)=0.0_WP; fs%rhoW(i,j,k)=0.0_WP
               end do
               call fs%get_bcond('top',mybc)
               do n=1,mybc%itr%no_
                  i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
                  fs%U(i,j,k)=0.0_WP; fs%V(i,j,k)=0.0_WP; fs%W(i,j,k)=0.0_WP
+                 fs%rhoU(i,j,k)=0.0_WP; fs%rhoV(i,j,k)=0.0_WP; fs%rhoW(i,j,k)=0.0_WP
               end do
             end block dirichlet_velocity
 
             ! Solve Poisson equation
             call fs%correct_mfr(drhodt=dRHOdt)
             call fs%get_div(drhodt=dRHOdt)
-            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid !TODO: Does this need *rho?
+            fs%psolv%rhs=-fs%cfg%vol*fs%div/time%dtmid
             fs%psolv%sol=0.0_WP
             call fs%psolv%solve()
             call fs%shift_p(fs%psolv%sol)
@@ -675,6 +727,7 @@ contains
                do i=1,lp%np_
                   pmesh%var(1,i)=lp%p(i)%d
                   pmesh%vec(:,1,i)=lp%p(i)%vel
+                  pmesh%vec(:,2,i)=lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
                end do
             end block update_pmesh
             call ens_out%write_data(time%t)
@@ -682,9 +735,11 @@ contains
 
          ! Perform and output monitoring
          call fs%get_max()
+         call lp%get_max()
          call mfile%write()
          call cflfile%write()
          call forcefile%write()
+         call lptfile%write()
 
          ! Specialized post-processing
          if (ppevt%occurs()) call postproc_vel()

@@ -698,6 +698,8 @@ contains
 
     ! Zero out number of particles removed
     this%np_out=0
+    ! Zero out number of wall collisions
+    this%ncol=0
 
     ! Advance the equations
     do i=1,this%np_
@@ -733,6 +735,21 @@ contains
           if (this%cfg%nz.gt.1.and.present(srcW)) call this%cfg%set_scalar(Sp=-dmom(3),pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=srcW,bc='n')
           ! Increment
           dt_done=dt_done+mydt
+          ! Spectral reflection with walls
+          wall_col: block
+            use mathtools, only: Pi,normalize
+            real(WP) :: d12
+            real(WP), dimension(3) :: n12,Un
+            if (this%cfg%VF(myp%ind(1),myp%ind(2),myp%ind(3)).le.0.0_WP) then 
+               d12=this%cfg%get_scalar(pos=myp%pos,i0=myp%ind(1),j0=myp%ind(2),k0=myp%ind(3),S=this%Wdist,bc='d')
+               n12=this%Wnorm(:,myp%ind(1),myp%ind(2),myp%ind(3))
+               n12=-normalize(n12+[epsilon(1.0_WP),epsilon(1.0_WP),epsilon(1.0_WP)])
+               myp%pos=myp%pos+2.0_WP*d12*n12
+               Un=sum(myp%vel*n12)*n12
+               myp%vel=myp%vel-2.0_WP*Un
+               this%ncol=this%ncol+1
+            end if
+          end block wall_col
        end do
        ! Correct the position to take into account periodicity
        if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
