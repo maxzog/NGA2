@@ -10,10 +10,10 @@ Dynamic viscosity :    0.01
 Density :              1
 
 # Particle properties
-Steady-state TKE :      1.42
+Steady-state TKE :      3.42
 Particle density :      1000
 Particle diameter :     0 #5.336E-03 #1.57224E-03
-Number of particles :   500000
+Number of particles :   150000 #250000
 # 4 -> 1 / (1 + c * r^2)
 # 3 -> Weird exponential
 Correlation function :  3

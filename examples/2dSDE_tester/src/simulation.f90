@@ -141,7 +141,7 @@ contains
       create_sgs: block
          sgs=sgsmodel(cfg=fs%cfg,umask=fs%umask,vmask=fs%vmask,wmask=fs%wmask)
          sgs%Cs_ref=0.1_WP
-         sgs%visc=0.005_WP
+         sgs%visc=0.01_WP
       end block create_sgs
 
       ! Prepare initial velocity field
@@ -214,7 +214,7 @@ contains
                lp%p(i)%us=[random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms)]
-               lp%p(i)%us(3)=0.0_WP
+               lp%p(i)%us=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh

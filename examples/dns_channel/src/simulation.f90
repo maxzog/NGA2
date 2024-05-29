@@ -5,7 +5,7 @@ module simulation
    use fft2d_class,       only: fft2d
    use ddadi_class,       only: ddadi
    use incomp_class,      only: incomp
-   use randomwalk_class,  only: lpt
+   use lpt_class,         only: lpt
    use datafile_class,    only: datafile
    use timetracker_class, only: timetracker
    use ensight_class,     only: ensight
@@ -38,11 +38,7 @@ module simulation
    real(WP), dimension(:,:,:), allocatable :: Ui,Vi,Wi
    real(WP), dimension(:,:,:), allocatable :: S_
    real(WP), dimension(:,:,:,:), allocatable :: SR
-   real(WP), dimension(:,:,:,:), allocatable :: uiuj
-   real(WP), dimension(:,:,:,:), allocatable :: taudiv
    real(WP), dimension(:,:,:,:,:), allocatable :: gradu
-   real(WP), dimension(:,:), allocatable :: avgUU
-   real(WP), dimension(:), allocatable :: avgSS
    
    !> Statistics
    real(WP), dimension(:), allocatable :: Uavg,Uavg_,vol,vol_,U2,U2_
@@ -274,11 +270,6 @@ contains
          allocate(pW2_  (1:cfg%ny)); pW2_  =0.0_WP
          allocate(counter (1:cfg%ny)); counter =0.0_WP
          allocate(counter_(1:cfg%ny)); counter_=0.0_WP
-         ! Allocate arrays for Reynolds stress estimation
-         allocate(uiuj(6,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); uiuj=0.0_WP
-         allocate(taudiv(3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); taudiv=0.0_WP
-         allocate(avgUU(6,cfg%jmin:cfg%jmax)); avgUU=0.0_WP
-         allocate(avgSS(  cfg%jmin:cfg%jmax)); avgSS=0.0_WP
          allocate(gradu(3,3,cfg%imino_:cfg%imaxo_,cfg%jmino_:cfg%jmaxo_,cfg%kmino_:cfg%kmaxo_)); gradu=0.0_WP
       end block allocate_work_arrays
 
@@ -430,17 +421,12 @@ contains
                lp%p(i)%vel=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
-               ! Init stochastic process at zero
-               lp%p(i)%us=0.0_WP
-               ! Init Wiener process to zero
-               lp%p(i)%dW=0.0_WP
                ! Locate the particle on the mesh
                lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
                ! Activate the particle
                lp%p(i)%flag=0
             end do
          end if
-         lp%meanUn=0.0_WP
          ! Distribute particles
          call lp%sync()
       end block initialize_lpt
@@ -453,14 +439,12 @@ contains
          pmesh%varname(1)="id"
          pmesh%vecname(1)="vel"
          pmesh%vecname(2)="fld"
-         pmesh%vecname(3)="uf"
          call lp%resize(np)
          call lp%update_partmesh(pmesh)
          do i = 1,lp%np_
             pmesh%var(1,i) = lp%p(i)%id
             pmesh%vec(:,1,i) = lp%p(i)%vel
             pmesh%vec(:,2,i) = lp%cfg%get_velocity(pos=lp%p(i)%pos,i0=lp%p(i)%ind(1),j0=lp%p(i)%ind(2),k0=lp%p(i)%ind(3),U=fs%U,V=fs%V,W=fs%W)
-            pmesh%vec(:,3,i) = lp%p(i)%us 
          end do
       end block create_pmesh
 
@@ -523,9 +507,6 @@ contains
          call lptfile%add_column(time%t,'Time')
          call lptfile%add_column(lp%np,'Particle number')
          call lptfile%add_column(lp%ncol,'Collisions')
-         call lptfile%add_column(lp%meanUn(1),'Deposition X vel')
-         call lptfile%add_column(lp%meanUn(2),'Deposition Y vel')
-         call lptfile%add_column(lp%meanUn(3),'Deposition Z vel')
          call lptfile%add_column(lp%Umin,'Particle Umin')
          call lptfile%add_column(lp%Umax,'Particle Umax')
          call lptfile%add_column(lp%Vmin,'Particle Vmin')
@@ -566,7 +547,8 @@ contains
          fs%Uold=fs%U
          fs%Vold=fs%V
          fs%Wold=fs%W
-
+         
+         ! TODO: Remove the line below if not needed
          fs%visc=visc; resU=fs%rho; resV=fs%visc
          call lp%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,rho=resU,visc=resV)
          ! Apply time-varying Dirichlet conditions
@@ -678,7 +660,6 @@ contains
                   pmesh%var(1,ii) = lp%p(ii)%id
                   pmesh%vec(:,1,ii) = lp%p(ii)%vel
                   pmesh%vec(:,2,ii) = lp%cfg%get_velocity(pos=lp%p(ii)%pos,i0=lp%p(ii)%ind(1),j0=lp%p(ii)%ind(2),k0=lp%p(ii)%ind(3),U=fs%U,V=fs%V,W=fs%W)
-                  pmesh%vec(:,3,ii) = lp%p(ii)%us
                end do
                call ens_out%write_data(time%t)
             end if

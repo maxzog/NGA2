@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 8 8  
+Partition :	1 6 6
 
 # Mesh definition
 Lx :	1.25664
@@ -22,7 +22,7 @@ Gravity : 0 0 0
 Particle timestep size     : 1e-3
 Collision timescale        : 15e-6
 Particle volume fraction   : 0.0004
-Particle diameter          : 0.0003952912
+Particle diameter          : 0.000484 #3952912
 Particle u velocity        : 0.36
 Particle fluctuations      : 0.1
 Particle density           : 1300

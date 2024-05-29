@@ -18,22 +18,22 @@ Wbulk : 0
 Perturbation : 0.25
 
 # Particles
-Number of particles :  100000
+Number of particles : 1064026
 Particle density : 1300
 # tau_p+ = 25
 # Particle diameter : 0.0004388 
 # tau_p+ = 0.063 (Ahmadi)
-Particle diameter : 2.643e-5
+Particle diameter : 0.000484 #3952912
 
 # Time integration
-Max timestep size : 2e-2
+Max timestep size : 0.001658 # dt = 0.06 * \frac{\nu}{u_{\tau}^2} 
 Max cfl number :    0.9
 Max time : 25.0
 
 # Ensight output
-Ensight output period :  5
+Ensight output period : 0.05 
 Postproc output period : 25.0
 
 # Restart output
-Restart output period : 50.0
-Restart from : 1.00000E+02
+Restart output period : 5.0
+Restart from : steady #1.00000E+02

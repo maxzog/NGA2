@@ -953,7 +953,7 @@ contains
   !> p%id=-1=> no coll, no move
  subroutine advance_scrw_tracer(this,dt,U,V,W,rho,sgs_visc)
    use mpi_f08,    only: MPI_SUM,MPI_INTEGER
-   use mathtools,  only: Pi,normalize,inverse_matrix
+   use mathtools,  only: Pi,normalize,inverse_matrix,cross_product
    use random,     only: random_normal
    use messager,   only: die
    implicit none
@@ -968,12 +968,15 @@ contains
    integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
    integer, dimension(:,:,:), allocatable :: npic
    integer, dimension(:,:,:,:), allocatable :: ipic
-   real(WP) :: rmydt,mydt,dt_done,sumW,unorm,gamma,tmp
-   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta
+   real(WP) :: rmydt,mydt,dt_done,sumW,unorm,gamma,tmp,theta,psi
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta,r2i
    real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf,frj,fri
+   real(WP), dimension(3) :: rll,rt1,rt2,pair_dW,tmpv1,tmpv2,tmpv3
+   real(WP), dimension(3) :: transform_1,transform_2,transform_3,spherical_corr
    real(WP), dimension(3,3) :: L,Linv
    type(part) :: pold,p1,p2
 
+   r2i = 1.0_WP / sqrt(2.0_WP)
    ! Zero out number of particles removed
    this%np_out=0
 
@@ -1095,9 +1098,90 @@ contains
                         print *, corrtp
                         call die("[advance] corr < 0")
                      end if
+                     
+                     ! Check if neighbor particle is the host particle
+                     if (p1%id.eq.p2%id) then
+                        ! b_ij = b_ij + p1%dW*rmydt
+                        cycle
+                     end if 
 
+                     !TODO: Allocate all this shit
+
+                     ! Build par and perp diffusion coefficients
+                     b_par  = b
+                     b_perp = 4.0_WP/3.0_WP * b
+
+                     ! Compute the reference axes
+                     rll = r12
+                     rll_dot = dot_product(rll,rll)+epsilon(1.0_WP)
+
+                     ! Generate an orthonormal set based on max slip component
+                     ind = maxloc(abs(rll),dim=1)
+                     select case (ind)
+                     case(1)
+                        ! Max slip in x-direction
+                        rt1     = -(rll(2)/rll_dot)*rll
+                        rt1(2)  = 1.0_WP + rt1(2)
+                        rt1_dot = dot_product(rt1,rt1)+epsilon(1.0_WP)
+                     case(2)
+                        ! Max slip in y-direction
+                        rt1     = -(rll(1)/rll_dot)*rll
+                        rt1(1)  = 1.0_WP + rt1(1)
+                        rt1_dot = dot_product(rt1,rt1)+epsilon(1.0_WP)
+                     case(3)
+                        ! Max slip in z-direction
+                        rt1     = -(rll(1)/rll_dot)*rll
+                        rt1(1)  = 1.0_WP + rt1(1)
+                        rt1_dot = dot_product(rt1,rt1)+epsilon(1.0_WP)                
+                     end select
+
+                     ! rt2 right-hand coordinate system (cross product)
+                     rt2(1) = rll(2)*rt1(3) - rll(3)*rt1(2)
+                     rt2(2) = rll(3)*rt1(1) - rll(1)*rt1(3)
+                     rt2(3) = rll(1)*rt1(2) - rll(2)*rt1(1)
+                     rt2_dot = dot_product(rt2,rt2)+epsilon(1.0_WP)
+
+                     ! Normalize basis vectors
+                     rll = rll/sqrt(rll_dot)
+                     rt1 = rt1/sqrt(rt1_dot)
+                     rt2 = rt2/sqrt(rt2_dot)
+
+                     ! Construct rotation matrices
+                     Q(:,1) = rll
+                     Q(:,2) = rt1
+                     Q(:,3) = rt2
+
+                     ! Multiply Q by b^dag
+                     temp(1,1) = Q(1,1)*b_par
+                     temp(2,1) = Q(2,1)*b_par
+                     temp(3,1) = Q(3,1)*b_par
+
+                     temp(1,2) = Q(1,2)*b_perp
+                     temp(2,2) = Q(2,2)*b_perp
+                     temp(3,2) = Q(3,2)*b_perp
+
+                     temp(1,3) = Q(1,3)*b_perp
+                     temp(2,3) = Q(2,3)*b_perp
+                     temp(3,3) = Q(3,3)*b_perp
+
+                     ! Multiply Q*b^dag (temp) by Q^T  to get bij tensor
+                     bij(1,1) = temp(1,1)*Q(1,1) + temp(1,2)*Q(1,2) + temp(1,3)*Q(1,3)
+                     bij(1,2) = temp(1,1)*Q(2,1) + temp(1,2)*Q(2,2) + temp(1,3)*Q(2,3)
+                     bij(1,3) = temp(1,1)*Q(3,1) + temp(1,2)*Q(3,2) + temp(1,3)*Q(3,3)
+
+                     bij(2,1) = temp(2,1)*Q(1,1) + temp(2,2)*Q(1,2) + temp(2,3)*Q(1,3)
+                     bij(2,2) = temp(2,1)*Q(2,1) + temp(2,2)*Q(2,2) + temp(2,3)*Q(2,3)
+                     bij(2,3) = temp(2,1)*Q(3,1) + temp(2,2)*Q(3,2) + temp(2,3)*Q(3,3)
+
+                     bij(3,1) = temp(3,1)*Q(1,1) + temp(3,2)*Q(1,2) + temp(3,3)*Q(1,3)
+                     bij(3,2) = temp(3,1)*Q(2,1) + temp(3,2)*Q(2,2) + temp(3,3)*Q(2,3)
+                     bij(3,3) = temp(3,1)*Q(3,1) + temp(3,2)*Q(3,2) + temp(3,3)*Q(3,3)
+
+                     b_ij(1) = b_ij(1) + rmydt*dot_product(rll, spherical_corr)
+                     b_ij(2) = b_ij(2) + rmydt*dot_product(rt1, spherical_corr)
+                     b_ij(3) = b_ij(3) + rmydt*dot_product(rt2, spherical_corr)
+                     ! b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
                      corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
-                     b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
                      if (p1%id.ne.p2%id) then
                         ! SPH terms
                         ! sumW=sumW+kernel(d12,delta)

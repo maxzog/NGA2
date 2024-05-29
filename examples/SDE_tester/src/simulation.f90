@@ -211,6 +211,7 @@ contains
                lp%p(i)%us=[random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms),&
                &           random_normal(m=0.0_WP,sd=init_rms)]
+               lp%p(i)%us=0.0_WP
                ! Give zero dt
                lp%p(i)%dt=0.0_WP
                ! Locate the particle on the mesh
