@@ -964,16 +964,16 @@ contains
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: sgs_visc  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-   real(WP), dimension(3) :: b_ij,driftsum,usj
-   integer :: i,ierr,no,i2,ii,jj,kk,nn,counter
+   real(WP), dimension(3) :: driftsum,usj
+   integer :: i,ierr,no,i2,ii,jj,kk,nn,counter,ind
    integer, dimension(:,:,:), allocatable :: npic
    integer, dimension(:,:,:,:), allocatable :: ipic
    real(WP) :: rmydt,mydt,dt_done,sumW,unorm,gamma,tmp,theta,psi
+   real(WP) :: rll_dot,rt1_dot,rt2_dot,b_par,b_perp
    real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta,r2i
-   real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf,frj,fri
+   real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf,frj,fri,b_cartesian
    real(WP), dimension(3) :: rll,rt1,rt2,pair_dW,tmpv1,tmpv2,tmpv3
-   real(WP), dimension(3) :: transform_1,transform_2,transform_3,spherical_corr
-   real(WP), dimension(3,3) :: L,Linv
+   real(WP), dimension(3,3) :: bij,Q,temp,L
    type(part) :: pold,p1,p2
 
    r2i = 1.0_WP / sqrt(2.0_WP)
@@ -981,10 +981,9 @@ contains
    this%np_out=0
 
    do i=1,this%np_
-      call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
       this%p(i)%dW =   [random_normal(m=0.0_WP, sd=1.0_WP), & 
                      &  random_normal(m=0.0_WP, sd=1.0_WP), &
-                     &  random_normal(m=0.0_WP, sd=1.0_WP)] * b
+                     &  random_normal(m=0.0_WP, sd=1.0_WP)]
    end do
    
    ! Share particles across overlap
@@ -1055,9 +1054,12 @@ contains
          r1=p1%pos
 
          ! Correlate diffusion
-         b_ij    = 0.0_WP
+         bij     = 0.0_WP
          corrsum = 0.0_WP
+         Q       = 0.0_WP
+         temp    = 0.0_WP
          L       = 0.0_WP
+         b_cartesian = 0.0_Wp
          counter = 0
          driftsum= 0.0_WP
          sumW    = epsilon(1.0_WP)
@@ -1084,6 +1086,8 @@ contains
                         dW=this%g(i2)%dW
                         usj=this%g(i2)%us
                      end if
+                     
+                     call this%get_diffusion_crw(p=p2,rho=rho,sgs_visc=sgs_visc,b=b)
 
                      ! Compute relative information
                      r12 = r2-r1
@@ -1101,7 +1105,8 @@ contains
                      
                      ! Check if neighbor particle is the host particle
                      if (p1%id.eq.p2%id) then
-                        ! b_ij = b_ij + p1%dW*rmydt
+                        b_cartesian= b_cartesian + b*p1%dW*rmydt
+                        corrsum = corrsum + corrtp*corrtp
                         cycle
                      end if 
 
@@ -1152,17 +1157,17 @@ contains
                      Q(:,3) = rt2
 
                      ! Multiply Q by b^dag
-                     temp(1,1) = Q(1,1)*b_par
-                     temp(2,1) = Q(2,1)*b_par
-                     temp(3,1) = Q(3,1)*b_par
+                     temp(1,1) = Q(1,1)*b_par*corrtp 
+                     temp(2,1) = Q(2,1)*b_par*corrtp
+                     temp(3,1) = Q(3,1)*b_par*corrtp
 
-                     temp(1,2) = Q(1,2)*b_perp
-                     temp(2,2) = Q(2,2)*b_perp
-                     temp(3,2) = Q(3,2)*b_perp
+                     temp(1,2) = Q(1,2)*b_perp*corrtp 
+                     temp(2,2) = Q(2,2)*b_perp*corrtp
+                     temp(3,2) = Q(3,2)*b_perp*corrtp
 
-                     temp(1,3) = Q(1,3)*b_perp
-                     temp(2,3) = Q(2,3)*b_perp
-                     temp(3,3) = Q(3,3)*b_perp
+                     temp(1,3) = Q(1,3)*b_perp*corrtp
+                     temp(2,3) = Q(2,3)*b_perp*corrtp
+                     temp(3,3) = Q(3,3)*b_perp*corrtp
 
                      ! Multiply Q*b^dag (temp) by Q^T  to get bij tensor
                      bij(1,1) = temp(1,1)*Q(1,1) + temp(1,2)*Q(1,2) + temp(1,3)*Q(1,3)
@@ -1177,31 +1182,33 @@ contains
                      bij(3,2) = temp(3,1)*Q(2,1) + temp(3,2)*Q(2,2) + temp(3,3)*Q(2,3)
                      bij(3,3) = temp(3,1)*Q(3,1) + temp(3,2)*Q(3,2) + temp(3,3)*Q(3,3)
 
-                     b_ij(1) = b_ij(1) + rmydt*dot_product(rll, spherical_corr)
-                     b_ij(2) = b_ij(2) + rmydt*dot_product(rt1, spherical_corr)
-                     b_ij(3) = b_ij(3) + rmydt*dot_product(rt2, spherical_corr)
+                     b_cartesian(1) = b_cartesian(1) + rmydt*sum(bij(1,:)*dW)
+                     b_cartesian(2) = b_cartesian(2) + rmydt*sum(bij(2,:)*dW)
+                     b_cartesian(3) = b_cartesian(3) + rmydt*sum(bij(3,:)*dW)
                      ! b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
                      corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
-                     if (p1%id.ne.p2%id) then
-                        ! SPH terms
-                        ! sumW=sumW+kernel(d12,delta)
-                        ! dWdx=gradW(d12,delta,p1%pos,p2%pos)
-                        ! dWdx(1) = sum(L(1,:)*buf)
-                        ! dWdx(2) = sum(L(2,:)*buf)
-                        ! dWdx(3) = sum(L(3,:)*buf)
 
-                        ! Compute relative damping (drift)
-                        unorm=sum((p2%us-p1%us)*r12)/d12
-                        if (unorm.lt.0.0_WP) then
-                                driftsum=driftsum+gamma*corrtp**2*unorm*r12/d12
-                        else
-                                driftsum=driftsum+gamma*corrtp**2*unorm*r12/d12
-                        end if
-                        ! Compute conservative force (spring, DPD)
-!!                        if (d12.lt.delta) then
-!!                           driftsum=driftsum-0.25_WP*(2.0_WP/3.0_WP * d12**(-d12/3.0_WP))*r12/d12
-!!                        end if
-                     end if
+                     ! Drift corrections - experimenting
+!                      if (p1%id.ne.p2%id) then
+!                         ! SPH terms
+!                         ! sumW=sumW+kernel(d12,delta)
+!                         ! dWdx=gradW(d12,delta,p1%pos,p2%pos)
+!                         ! dWdx(1) = sum(L(1,:)*buf)
+!                         ! dWdx(2) = sum(L(2,:)*buf)
+!                         ! dWdx(3) = sum(L(3,:)*buf)
+!
+!                         ! Compute relative damping (drift)
+!                         unorm=sum((p2%us-p1%us)*r12)/d12
+!                         if (unorm.lt.0.0_WP) then
+!                                 driftsum=driftsum+gamma*corrtp**2*unorm*r12/d12
+!                         else
+!                                 driftsum=driftsum+gamma*corrtp**2*unorm*r12/d12
+!                         end if
+!                         ! Compute conservative force (spring, DPD)
+! !!                        if (d12.lt.delta) then
+! !!                           driftsum=driftsum-0.25_WP*(2.0_WP/3.0_WP * d12**(-d12/3.0_WP))*r12/d12
+! !!                        end if
+!                      end if
                   end do
                end do
             end do
@@ -1294,9 +1301,9 @@ contains
          call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
          call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
 
-         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b_ij(1)/sqrt(corrsum) + driftsum(1)*mydt
-         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b_ij(2)/sqrt(corrsum) + driftsum(2)*mydt
-         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b_ij(3)/sqrt(corrsum) + driftsum(3)*mydt
+         tmp1 = (1.0_WP - a*mydt)*p1%us(1) + b_cartesian(1)/sqrt(corrsum) + driftsum(1)*mydt
+         tmp2 = (1.0_WP - a*mydt)*p1%us(2) + b_cartesian(2)/sqrt(corrsum) + driftsum(2)*mydt
+         tmp3 = (1.0_WP - a*mydt)*p1%us(3) + b_cartesian(3)/sqrt(corrsum) + driftsum(3)*mydt
 
          p1%vel=this%cfg%get_velocity(pos=p1%pos,i0=p1%ind(1),j0=p1%ind(2),k0=p1%ind(3),U=U,V=V,W=W)
          p1%pos=pold%pos + mydt*(p1%vel + p1%us)
