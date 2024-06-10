@@ -1554,7 +1554,7 @@ contains
          rho_ij = (exp(-r**2/sigma)-exp(-rcut**2/sigma))/(1.0_WP - exp(-rcut**2/sigma))
       end if
    case(3)
-      rho_ij = EXP(-0.5_WP * r**2 / rcut**2)
+      rho_ij = EXP(-0.5_WP * r**2 / sigma**2)
    case(4)
       rho_ij = 1.0_WP / (1.0_WP + 5000.0_WP * r**2)
    case(5)

@@ -192,6 +192,7 @@ contains
          call param_read('Correlation function', lp%corr_type)
          init_rms = (maxval(sgs%visc) / fs%rho / fs%cfg%min_meshsize / 0.067_WP)**2
          init_rms = sqrt(2.0_WP / 3.0_WP * init_rms)
+         if (fs%cfg%amRoot) print *, "Init RMS :: ", init_rms
          ! Check if a particles should be read in
          ! Root process initializes np particles randomly
          if (lp%cfg%amRoot) then
