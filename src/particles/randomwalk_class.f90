@@ -852,7 +852,7 @@ contains
                         ! Compute relative information
                         r12 = r2-r1
                         d12  = norm2(r12)
-                        call this%correlation_function(r=d12,rho_ij=corrtp)
+                        call this%correlation_function(r=d12,sigma=this%cfg%min_meshsize,rho_ij=corrtp)
 
                         if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
                            print *, corrtp
@@ -970,7 +970,8 @@ contains
    integer, dimension(:,:,:,:), allocatable :: ipic
    real(WP) :: rmydt,mydt,dt_done,sumW,unorm,gamma,tmp,theta,psi
    real(WP) :: rll_dot,rt1_dot,rt2_dot,b_par,b_perp
-   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,corrtp,d12,delta,r2i
+   real(WP) :: a,b,corrsum,tmp1,tmp2,tmp3,d12,delta,r2i
+   real(WP) :: corr_ll,corr_nn ! Longitudinal and transverse correlation functions
    real(WP), dimension(3) :: r1,r2,r12,dW,dWdx,buf,frj,fri,b_cartesian
    real(WP), dimension(3) :: rll,rt1,rt2,pair_dW,tmpv1,tmpv2,tmpv3
    real(WP), dimension(3,3) :: bij,Q,temp,L
@@ -1092,25 +1093,24 @@ contains
                      ! Compute relative information
                      r12 = r2-r1
                      d12  = norm2(r12)
-                     call this%correlation_function(r=d12,rho_ij=corrtp)
+                     call this%correlation_function(r=d12,sigma=this%cfg%min_meshsize,rho_ij=corr_ll)
+                     call this%correlation_function(r=d12,sigma=0.5_WP*this%cfg%min_meshsize,rho_ij=corr_nn)
 
-                     if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
-                        print *, corrtp
-                        call die("[advance] corr > 1")
-                     end if
-                     if (corrtp.lt.0.0_WP) then 
-                        print *, corrtp
-                        call die("[advance] corr < 0")
-                     end if
+                     ! if (corrtp.gt.1.0_WP+epsilon(1.0_WP)) then 
+                     !    print *, corrtp
+                     !    call die("[advance] corr > 1")
+                     ! end if
+                     ! if (corrtp.lt.0.0_WP) then 
+                     !    print *, corrtp
+                     !    call die("[advance] corr < 0")
+                     ! end if
                      
                      ! Check if neighbor particle is the host particle
                      if (p1%id.eq.p2%id) then
                         b_cartesian= b_cartesian + b*p1%dW*rmydt
-                        corrsum = corrsum + corrtp*corrtp
+                        corrsum = corrsum + 1.0_WP
                         cycle
                      end if 
-
-                     !TODO: Allocate all this shit
 
                      ! Build par and perp diffusion coefficients
                      b_par  = b
@@ -1157,17 +1157,17 @@ contains
                      Q(:,3) = rt2
 
                      ! Multiply Q by b^dag
-                     temp(1,1) = Q(1,1)*b_par*corrtp 
-                     temp(2,1) = Q(2,1)*b_par*corrtp
-                     temp(3,1) = Q(3,1)*b_par*corrtp
+                     temp(1,1) = Q(1,1)*corr_ll 
+                     temp(2,1) = Q(2,1)*corr_ll
+                     temp(3,1) = Q(3,1)*corr_ll
 
-                     temp(1,2) = Q(1,2)*b_perp*corrtp 
-                     temp(2,2) = Q(2,2)*b_perp*corrtp
-                     temp(3,2) = Q(3,2)*b_perp*corrtp
+                     temp(1,2) = Q(1,2)*corr_nn 
+                     temp(2,2) = Q(2,2)*corr_nn
+                     temp(3,2) = Q(3,2)*corr_nn
 
-                     temp(1,3) = Q(1,3)*b_perp*corrtp
-                     temp(2,3) = Q(2,3)*b_perp*corrtp
-                     temp(3,3) = Q(3,3)*b_perp*corrtp
+                     temp(1,3) = Q(1,3)*corr_nn
+                     temp(2,3) = Q(2,3)*corr_nn
+                     temp(3,3) = Q(3,3)*corr_nn
 
                      ! Multiply Q*b^dag (temp) by Q^T  to get bij tensor
                      bij(1,1) = temp(1,1)*Q(1,1) + temp(1,2)*Q(1,2) + temp(1,3)*Q(1,3)
@@ -1182,12 +1182,13 @@ contains
                      bij(3,2) = temp(3,1)*Q(2,1) + temp(3,2)*Q(2,2) + temp(3,3)*Q(2,3)
                      bij(3,3) = temp(3,1)*Q(3,1) + temp(3,2)*Q(3,2) + temp(3,3)*Q(3,3)
 
-                     b_cartesian(1) = b_cartesian(1) + rmydt*sum(bij(1,:)*dW)
-                     b_cartesian(2) = b_cartesian(2) + rmydt*sum(bij(2,:)*dW)
-                     b_cartesian(3) = b_cartesian(3) + rmydt*sum(bij(3,:)*dW)
+                     b_cartesian(1) = b_cartesian(1) + b*rmydt*sum(bij(1,:)*dW)
+                     b_cartesian(2) = b_cartesian(2) + b*rmydt*sum(bij(2,:)*dW)
+                     b_cartesian(3) = b_cartesian(3) + b*rmydt*sum(bij(3,:)*dW)
                      ! b_ij = b_ij + corrtp*dW*rmydt       ! Neighbor correlation 
-                     corrsum = corrsum + corrtp*corrtp   ! Kernel normalization
+                     corrsum = corrsum + corr_ll*corr_nn   ! Kernel normalization
 
+                     ! matrix_corrsum = matrix_corrsum + bij*bij
                      ! Drift corrections - experimenting
 !                      if (p1%id.ne.p2%id) then
 !                         ! SPH terms
@@ -1298,6 +1299,7 @@ contains
 !!            end do
 !!         end do
          driftsum=0.0_WP
+         ! matrix_corrsum=matrix_corrsum
          call this%get_drift(p=p1,rho=rho,sgs_visc=sgs_visc,a=a)
          call this%get_diffusion_crw(p=this%p(i),rho=rho,sgs_visc=sgs_visc,b=b)
 
@@ -1533,30 +1535,30 @@ contains
  end subroutine advance_crw_tracer
 
 
- subroutine correlation_function(this, r, rho_ij)
+ subroutine correlation_function(this, r, sigma, rho_ij)
    implicit none
    class(lpt), intent(inout) :: this
-   real(WP), intent(in) :: r
+   real(WP), intent(in) :: r, sigma
    real(WP), intent(inout) :: rho_ij
-   real(WP) :: Rc, sig
+   real(WP) :: rcut
 
-   Rc=this%cfg%min_meshsize !*200.0_WP
-   sig = 2.0_WP*0.17_WP**2
+   rcut=this%cfg%min_meshsize !*200.0_WP
    select case(this%corr_type)
    case(1)
       rho_ij = 1.0_WP
    case(2)
+      print *, "You shouldn't use this one"
       if (r.gt.0.5894_WP) then 
          rho_ij=0.0_WP
       else
-         rho_ij = (exp(-r**2/sig)-exp(-Rc**2/sig))/(1.0_WP - exp(-Rc**2/sig))
+         rho_ij = (exp(-r**2/sigma)-exp(-rcut**2/sigma))/(1.0_WP - exp(-rcut**2/sigma))
       end if
    case(3)
-      rho_ij = EXP(-0.5_WP * r**2 / Rc**2)
+      rho_ij = EXP(-0.5_WP * r**2 / rcut**2)
    case(4)
       rho_ij = 1.0_WP / (1.0_WP + 5000.0_WP * r**2)
    case(5)
-      rho_ij = 1.0_WP - EXP(-0.5_WP / r**2 / Rc**2)
+      rho_ij = 1.0_WP - EXP(-0.5_WP / r**2 / sigma**2)
    case default
       rho_ij = 1.0_WP
    end select
