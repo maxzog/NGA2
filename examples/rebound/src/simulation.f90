@@ -8,6 +8,7 @@ module simulation
   use partmesh_class,    only: partmesh
   use event_class,       only: event
   use monitor_class,     only: monitor
+  use messager,          only: die
   implicit none
   private
 
@@ -25,6 +26,9 @@ module simulation
   real(WP), dimension(3) :: pos,vel,angvel
 
   public :: simulation_init,simulation_run,simulation_final
+
+
+  integer :: save_count
 
 contains
 
@@ -100,7 +104,8 @@ contains
          dtheta=90.0_WP/np
          call lp%resize(np)
          do i=1,np
-            print *, (i-1)*dtheta+1.0_WP
+            ! print *, (i-1)*dtheta+1.0_WP
+            print *, i*v0
             ! Initialize with one particle
             lp%p(i)%d=d
             lp%p(i)%col=0
@@ -117,10 +122,18 @@ contains
             lp%p(i)%ind=lp%cfg%get_ijk_global(lp%p(i)%pos,[lp%cfg%imin,lp%cfg%jmin,lp%cfg%kmin])
             lp%p(i)%flag=0
          end do
-         lp%p(1)%vel=[-5.5_WP, 0.0_WP, 0.0_WP]
-         lp%p(2)%vel=[ 5.5_WP, 0.0_WP, 0.0_WP]
-         lp%p(1)%pos=[real( 2.5E-6, WP), 0.05_WP, 0.0_WP]
-         lp%p(2)%pos=[real(-2.5E-6, WP), 0.05_WP, 0.0_WP]
+
+         ! lp%p(1)%vel=v0*[ 0.0_WP, 0.0_WP, 0.0_WP]
+         ! lp%p(2)%vel=v0*[ 1.0_WP, 0.0_WP, 0.0_WP]
+         ! lp%p(3)%vel=v0*[-1.0_WP, 0.0_WP, 0.0_WP]
+         ! lp%p(4)%vel=v0*[ 0.0_WP, 1.0_WP, 0.0_WP]
+         ! lp%p(5)%vel=v0*[ 0.0_WP,-1.0_WP, 0.0_WP]
+
+         ! lp%p(1)%pos=[ 0.0_WP, 0.05_WP, 0.0_WP]
+         ! lp%p(2)%pos=[real(-5.5E-6, WP), 0.05_WP, 0.0_WP]
+         ! lp%p(3)%pos=[real( 5.5E-6, WP), 0.05_WP, 0.0_WP]
+         ! lp%p(4)%pos=[ 0.0_WP, 0.05_WP-real(5.5E-6, WP), 0.0_WP]
+         ! lp%p(5)%pos=[ 0.0_WP, 0.05_WP+real(5.5E-6, WP), 0.0_WP]
       end if
       call lp%sync()
     end block initialize_lpt
@@ -146,6 +159,7 @@ contains
 
     ! Add Ensight output
     create_ensight: block
+      save_count=0
       ! Create Ensight output from cfg
       ens_out=ensight(cfg=lp%cfg,name='rebound')
       ! Create event for Ensight output
@@ -207,8 +221,6 @@ contains
        call time%adjust_dt()
        call time%increment()
 
-       print *, lp%p(1)%pos(1)-lp%p(2)%pos(1)
-
        ! Collide particles
        call lp%collide_marshall(dt=time%dt)
 
@@ -220,6 +232,7 @@ contains
           update_pmesh: block
             integer :: i
             call lp%update_partmesh(pmesh)
+            save_count=save_count + 1
             do i=1,lp%np_
                pmesh%var(1,i)=real(lp%p(i)%id,WP)
                pmesh%var(2,i)=lp%p(i)%d
@@ -237,6 +250,7 @@ contains
        call cflfile%write()
       !  print *, lp%p(1)%debug(1)
 
+      if (save_count.gt.1000) call die("Done!")
     end do
 
   end subroutine simulation_run

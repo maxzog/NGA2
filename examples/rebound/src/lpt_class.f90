@@ -833,7 +833,7 @@ contains
         delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
 
         ! Conditions for the collision
-        isOverlap = delta_n.gt.0.0_WP                 ! Is the particle overlapped?
+        isOverlap = delta_n.gt.0.0_WP                ! Is the particle overlapped?
         if (delta_n.lt.-delta_c) this%p(i1)%col(0)=0 ! Has the particle necked?
         isCol = this%p(i1)%col(0).eq.1               ! Is the particle colliding but not overlapped?
 
@@ -1023,18 +1023,20 @@ contains
                     isOverlap = delta_n.gt.0.0_WP  ! Are the particles overlapped?
 
                     ! Check if the particles have been colliding
-                    i = FINDLOC(this%p(i1)%colId, value=i2, dim=1)
+                    i = findloc(this%p(i1)%colId, value=i2, dim=1)
                     if (i.ne.0) then
                        ! Check if particles have separated
                        if (delta_n.lt.-delta_c) this%p(i1)%colId(i)=0
                        isCol = this%p(i1)%colId(i).eq.i2
+                    else
+                       isCol = .false.
                     end if
 
                     ! assess if there is collision
                     if (isOverlap.or.isCol) then
                        ! Store particle 2 ID if this is the first step of the collision
                        if (isOverlap.and..not.isCol) then
-                          i = FINDLOC(this%p(i1)%colId, value=0, dim=1)
+                          i = findloc(this%p(i1)%colId, value=0, dim=1)
                           if (i.eq.0) call die("[lpt collide_marshall] Error: Too many particle-particle collisions!")
                           this%p(i1)%colId(i)=i2
                        end if
@@ -1101,7 +1103,7 @@ contains
 
    contains
 
-     ! Newton Raphson root find of the particle contact radius
+     ! Newton-Raphson root find of the particle contact radius
      subroutine find_contact_radius(x, delta_n, delta_c, numiter) 
       implicit none
       real(WP), intent(inout) :: x
