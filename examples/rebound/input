@@ -15,15 +15,16 @@ Max cfl number :	1
 
 # Particle parameters
 Gravity :   0 0 0
-Particle diameter :         4.9e-6 
-Particle density :          1350
-Particle position :         2.5e-6 #0.0 0.00251 0.0
-Particle velocity :         0.4 #1.95 -3.377 0
-Number of particles :       50
+Particle diameter :         5e-6 
+Particle density :          2320 #1350
+Particle position :         2.6e-6 #0.0 0.00251 0.0
+Particle velocity :         0.8 #1.95 -3.377 0
+Number of particles :       100
 
-Elastic modulus :     1.337E+09
+Elastic modulus :     70.8E+09
 Shear modulus :       500E+06
-Free surface energy : 0.17
+Yield strength :        200e6 #400E+06
+Free surface energy : 0.8 #0.17
 
 # Particle collisions
 Coefficient of restitution :    0.84

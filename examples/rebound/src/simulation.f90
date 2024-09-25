@@ -98,7 +98,8 @@ contains
       call param_read('Number of particles',np)
       call param_read('Elastic modulus',lp%E)
       call param_read('Shear modulus',lp%Eshear)
-      call param_read('Free surface energy',lp%gamma,default=0.3_WP)
+      call param_read('Free surface energy',lp%gamma)
+      call param_read('Yield strength',lp%sigma_y)
       if (lp%cfg%amRoot) then
          dx=lp%cfg%xL/np
          dtheta=90.0_WP/np
@@ -222,7 +223,7 @@ contains
        call time%increment()
 
        ! Collide particles
-       call lp%collide_marshall(dt=time%dt)
+       call lp%collide_bons(dt=time%dt)
 
        ! Advance particles by dt
        call lp%advance(dt=time%dt)
@@ -248,9 +249,8 @@ contains
        call communicate_part
        call mfile%write()
        call cflfile%write()
-      !  print *, lp%p(1)%debug(1)
-
-      if (save_count.gt.1000) call die("Done!")
+        
+       if (save_count.gt.1000) call die("Done!")
     end do
 
   end subroutine simulation_run

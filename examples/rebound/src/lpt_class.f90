@@ -78,6 +78,8 @@ module lpt_class
      real(WP) :: rho                                     !< Density of particle
      real(WP) :: E, Eshear                               !< Elastic moduli (Youngs and Shear)
      real(WP) :: gamma                                   !< Adhesion
+     real(WP) :: sigma_y                                 !< Yield stress
+     real(WP) :: impulse_ratio=0.3_WP                    !< See Eq. 13 in Bons 2017
 
      ! Gravitational acceleration
      real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
@@ -133,6 +135,7 @@ module lpt_class
      procedure :: update_partmesh                        !< Update a partmesh object using current particles
      procedure :: collide                                !< Evaluate interparticle collision force
      procedure :: collide_marshall                       !< Evaluate interparticle collision force
+     procedure :: collide_bons                           !< Evaluate interparticle collision force
      procedure :: advance                                !< Step forward the particle ODEs
      procedure :: get_rhs                                !< Compute rhs of particle odes
      procedure :: resize                                 !< Resize particle array to given size
@@ -844,7 +847,7 @@ contains
            a = 1.0_WP
            call find_contact_radius(a, delta_n, delta_c, numiter) 
            eta_n = 2.0_WP*alpha*SQRT(m1*this%E*a*a_c/3.0_WP)
-           f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12 - eta_n*rnv*n12
+           f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12
            ! tangential collision
            f_t=0.0_WP
            if (this%mu_f.gt.0.0_WP) then
@@ -855,9 +858,10 @@ contains
               else
                  if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
               end if
-              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(((f_n+2.0_WP*f_c*n12)*(f_n+2.0_WP*f_c*n12))))*t12/rtv
            end if
            ! calculate collision force
+           f_n=f_n - eta_n*rnv*n12 ! Dissipation not included in friction calculation
            f_n=f_n/m1; f_t=f_t/m1
            this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
            ! calculate collision torque
@@ -868,7 +872,7 @@ contains
         d12=abs(this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2))
         n12=[0.0_WP,sign(1.0_WP,this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2)),0.0_WP]
         rnv=dot_product(v1,n12)
-        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1) ! TODO: Should this be zeroed?
+        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1) 
         delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
         
         ! Conditions for the collision
@@ -883,7 +887,7 @@ contains
            a = 1.0_WP
            call find_contact_radius(a, delta_n, delta_c, numiter) 
            eta_n = 2.0_WP*alpha*SQRT(m1*this%E*a*a_c/3.0_WP)
-           f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12 - eta_n*rnv*n12
+           f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12
            ! tangential collision
            f_t=0.0_WP
            if (this%mu_f.gt.0.0_WP) then
@@ -894,9 +898,10 @@ contains
               else
                  if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
               end if
-              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(((f_n+2.0_WP*f_c*n12)*(f_n+2.0_WP*f_c*n12))))*t12/rtv
            end if
            ! calculate collision force
+           f_n=f_n - eta_n*rnv*n12 ! Dissipation not included in friction calculation
            f_n=f_n/m1; f_t=f_t/m1
            this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
            ! calculate collision torque
@@ -925,7 +930,7 @@ contains
            a = 1.0_WP
            call find_contact_radius(a, delta_n, delta_c, numiter) 
            eta_n = 2.0_WP*alpha*SQRT(m1*this%E*a*a_c/3.0_WP)
-           f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12 - eta_n*rnv*n12
+           f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12
            ! tangential collision
            f_t=0.0_WP
            if (this%mu_f.gt.0.0_WP) then
@@ -936,9 +941,10 @@ contains
               else
                  if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
               end if
-              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+              if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(((f_n+2.0_WP*f_c*n12)*(f_n+2.0_WP*f_c*n12))))*t12/rtv
            end if
            ! calculate collision force
+           f_n=f_n - eta_n*rnv*n12 ! Dissipation not included in friction calculation
            f_n=f_n/m1; f_t=f_t/m1
            this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
            ! calculate collision torque
@@ -1143,6 +1149,492 @@ contains
 
  end subroutine collide_marshall
 
+ !> Bounce-stick wall collisions (Bons 2017) with Marshall JKR particle-particle collisions 
+ subroutine collide_bons(this,dt,Gib,Nxib,Nyib,Nzib)
+   implicit none
+   class(lpt), intent(inout) :: this
+   real(WP), intent(inout) :: dt  !< Timestep size over which to advance
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: Gib  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: Nxib !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: Nyib !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout), optional :: Nzib !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+   integer, dimension(:,:,:), allocatable :: npic      !< Number of particle in cell
+   integer, dimension(:,:,:,:), allocatable :: ipic    !< Index of particle in cell
+
+   ! Check if all IB parameters are present
+   check_G: block
+     use messager, only: die
+     if (present(Gib).and.(.not.present(Nxib).or..not.present(Nyib).or..not.present(Nzib))) &
+          call die('[lpt collide] IB collisions need Gib, Nxib, Nyib, AND Nzib')
+   end block check_G
+
+   ! Start by zeroing out the collision force
+   zero_force: block
+     integer :: i
+     do i=1,this%np_
+        this%p(i)%Acol=0.0_WP
+        this%p(i)%Tcol=0.0_WP
+     end do
+   end block zero_force
+   
+   ! Then share particles across overlap
+   call this%share()
+
+   ! We can now assemble particle-in-cell information
+   pic_prep: block
+     use mpi_f08
+     integer :: i,ip,jp,kp,ierr
+     integer :: mymax_npic,max_npic
+
+     ! Allocate number of particle in cell
+     allocate(npic(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); npic=0
+
+     ! Count particles and ghosts per cell
+     do i=1,this%np_
+        ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+        npic(ip,jp,kp)=npic(ip,jp,kp)+1
+     end do
+     do i=1,this%ng_
+        ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+        npic(ip,jp,kp)=npic(ip,jp,kp)+1
+     end do
+
+     ! Get maximum number of particle in cell
+     mymax_npic=maxval(npic); call MPI_ALLREDUCE(mymax_npic,max_npic,1,MPI_INTEGER,MPI_MAX,this%cfg%comm,ierr)
+
+     ! Allocate pic map
+     allocate(ipic(1:max_npic,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); ipic=0
+
+     ! Assemble pic map
+     npic=0
+     do i=1,this%np_
+        ip=this%p(i)%ind(1); jp=this%p(i)%ind(2); kp=this%p(i)%ind(3)
+        npic(ip,jp,kp)=npic(ip,jp,kp)+1
+        ipic(npic(ip,jp,kp),ip,jp,kp)=i
+     end do
+     do i=1,this%ng_
+        ip=this%g(i)%ind(1); jp=this%g(i)%ind(2); kp=this%g(i)%ind(3)
+        npic(ip,jp,kp)=npic(ip,jp,kp)+1
+        ipic(npic(ip,jp,kp),ip,jp,kp)=-i
+     end do
+
+   end block pic_prep
+
+   ! Finally, calculate collision force
+   collision_force: block
+     use mpi_f08
+     use mathtools, only: Pi,normalize,cross_product
+     use messager, only: die
+     integer :: i,i1,i2,ii,jj,kk,nn,ierr,numiter
+     real(WP) :: d1,m1,d2,m2,d12,m12,buf
+     real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2,v12,n12,f_n,t12,f_t
+     real(WP) :: k_n,eta_n,k_coeff,eta_coeff,k_coeff_w,eta_coeff_w,rnv,r_influ,delta_n,rtv
+     real(WP) :: a_bons, b_bons, c_bons
+     real(WP) :: r, vol, KEn1, KEn2, Ecrit, ell, wel, wcrit, wmax, Acont, Uout, CoRn, Utan, Uout_ideal 
+     real(WP) :: f_c, a_c, a, delta_c, alpha
+     real(WP), parameter :: aclipnorm=1.0e-6_WP
+     real(WP), parameter :: acliptan=1.0e-9_WP
+     real(WP), parameter :: rcliptan=0.05_WP
+     logical :: isCol, isOverlap
+
+     ! reset collision counter
+     this%ncol=0
+
+     ! loop over all local particles
+     collision: do i1=1,this%np_
+
+        ! cycle if id<=0
+        if (this%p(i1)%id.le.0) cycle collision
+
+        ! store particle data
+        r1=this%p(i1)%pos
+        v1=this%p(i1)%vel
+        w1=this%p(i1)%angvel
+        d1=this%p(i1)%d
+        m1=this%rho*pi/6.0_WP*d1**3
+
+        ! Parameters for fit (from Bons)
+        a_bons = 0.1_WP
+        b_bons = 1.0_WP/7.0_WP
+        c_bons = 0.5_WP
+
+        ! Geometric and physical parameters
+        r = 0.5_WP*d1
+        ell = 2.0_WP/3.0_WP*d1
+        Acont = PI*r**2
+        vol = PI*d1**3/6.0_WP
+
+        ! precompute coefficients
+        a_c = (9.0_WP*pi*this%gamma*0.5_WP*d1**2/this%E)**(1.0_WP/3.0_WP)
+        f_c = 3.0_WP*pi*0.5_WP*d1*this%gamma
+        delta_c = a_c**2/((6.0_WP)**(1.0_WP/3.0_WP)*d1)
+        alpha = 1.2728_WP - 4.2783_WP*this%e_n + 11.087_WP*this%e_n**2 - 22.348_WP*this%e_n**3 + &
+              & 27.467_WP*this%e_n**4 - 18.022_WP*this%e_n**5 + 4.8218_WP*this%e_n**6
+
+        ! collide with walls in x
+        d12=abs(this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1))
+        n12=[sign(1.0_WP,this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1)),0.0_WP,0.0_WP]
+        rnv=dot_product(v1,n12)
+        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+        delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+
+        ! Conditions for the collision
+        isOverlap = delta_n.gt.0.0_WP            
+
+        ! assess if there is collision
+        if (isOverlap) then
+           ! Initial normal kinetic energy
+           KEn1 = 0.5_WP*m1*rnv**2
+
+           ! Deformation
+           wel   = sqrt(16.0_WP*KEn1/(3.0_WP*PI*d1*this%E))
+           wcrit = this%sigma_y*ell/this%E
+
+           ! Max elastic energy available for rebound
+           Ecrit = 0.5_WP*(this%E*Acont/ell)*wcrit**2
+
+           ! If plastic deformation occurs
+           ! TODO: Modify adhesion by sin(alpha) (see second paragraph on pg 5 of Bons 2017)
+           if (wel.gt.wcrit) then
+              wmax = ell - exp(log(ell - wcrit) - (KEn1 - Ecrit)/(this%sigma_y*vol))
+              Acont = Acont*(a_bons + b_bons*(wmax/wcrit)**c_bons) ! Contact area modified by adhesion
+              KEn2 = Ecrit - this%gamma*Acont                      ! Remove work of adhesion from available energy
+              Uout_ideal = sqrt(2.0_WP*Ecrit/m1)
+           else
+              Acont = Acont*(a_bons + b_bons*(wel/wcrit)**c_bons)
+              KEn2 = KEn1 - this%gamma*Acont
+              Uout_ideal = sqrt(2.0_WP*KEn1/m1)
+           end if
+        
+           ! Compute rebound velocity (check for sticking)
+           if (KEn2.lt.0.0_WP) then
+              Uout = 0.0_WP
+           else
+              Uout = sqrt(2.0_WP*KEn2/m1)
+           end if
+           
+           ! Tangential rebound velocity TODO: Modify by cos^2(alpha) (see eq 13 and discussion in Bons 2017)
+           Utan = rtv - this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
+
+           ! Set rebound velocity
+           this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+
+           ! If the particle sticks don't move it!
+           if (Uout.eq.0.0_WP) then
+              this%p(i1)%flag = -1
+              this%p(i1)%vel=0.0_WP
+           end if
+        end if
+
+        ! collide with walls in y
+        d12=abs(this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2))
+        n12=[0.0_WP,sign(1.0_WP,this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2)),0.0_WP]
+        rnv=dot_product(v1,n12)
+        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1) 
+        delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+        
+        ! Conditions for the collision
+        isOverlap = delta_n.gt.0.0_WP            
+
+        ! assess if there is collision 
+        if (isOverlap) then
+           ! Initial normal kinetic energy
+           KEn1 = 0.5_WP*m1*rnv**2
+
+           ! Deformation
+           wel   = sqrt(16.0_WP*KEn1/(3.0_WP*PI*d1*this%E))
+           wcrit = this%sigma_y*ell/this%E
+
+           ! Max elastic energy available for rebound
+           Ecrit = 0.5_WP*(this%E*Acont/ell)*wcrit**2
+
+           ! If plastic deformation occurs
+           ! TODO: Modify adhesion by sin(alpha) (see second paragraph on pg 5 of Bons 2017)
+           if (wel.gt.wcrit) then
+              wmax = ell - exp(log(ell - wcrit) - (KEn1 - Ecrit)/(this%sigma_y*vol))
+              Acont = Acont*(a_bons + b_bons*(wmax/wcrit)**c_bons) ! Contact area modified by adhesion
+              KEn2 = Ecrit - this%gamma*Acont                      ! Remove work of adhesion from available energy
+              Uout_ideal = sqrt(2.0_WP*Ecrit/m1)
+           else
+              Acont = Acont*(a_bons + b_bons*(wel/wcrit)**c_bons)
+              KEn2 = KEn1 - this%gamma*Acont
+              Uout_ideal = sqrt(2.0_WP*KEn1/m1)
+           end if
+        
+           ! Compute rebound velocity (check for sticking)
+           if (KEn2.lt.0.0_WP) then
+              Uout = 0.0_WP
+           else
+              Uout = sqrt(2.0_WP*KEn2/m1)
+           end if
+           
+           ! Tangential rebound velocity TODO: Modify by cos^2(alpha) (see eq 13 and discussion in Bons 2017)
+           Utan = rtv - this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
+
+           ! Set rebound velocity
+           this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+
+           ! If the particle sticks don't move it!
+           if (Uout.eq.0.0_WP) then
+              this%p(i1)%flag = -1
+              this%p(i1)%vel=0.0_WP
+           end if
+        end if
+
+        ! collide with walls in z
+        d12=abs(this%zwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(3))
+        n12=[0.0_WP,0.0_WP,sign(1.0_WP,this%zwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(3))]
+        rnv=dot_product(v1,n12)
+        r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+        delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+        
+        ! Conditions for the collision
+        isOverlap = delta_n.gt.0.0_WP        
+
+        ! assess if there is collision
+        if (isOverlap) then
+           ! Initial normal kinetic energy
+           KEn1 = 0.5_WP*m1*rnv**2
+
+           ! Deformation
+           wel   = sqrt(16.0_WP*KEn1/(3.0_WP*PI*d1*this%E))
+           wcrit = this%sigma_y*ell/this%E
+
+           ! Max elastic energy available for rebound
+           Ecrit = 0.5_WP*(this%E*Acont/ell)*wcrit**2
+
+           ! If plastic deformation occurs
+           ! TODO: Modify adhesion by sin(alpha) (see second paragraph on pg 5 of Bons 2017)
+           if (wel.gt.wcrit) then
+              wmax = ell - exp(log(ell - wcrit) - (KEn1 - Ecrit)/(this%sigma_y*vol))
+              Acont = Acont*(a_bons + b_bons*(wmax/wcrit)**c_bons) ! Contact area modified by adhesion
+              KEn2 = Ecrit - this%gamma*Acont                      ! Remove work of adhesion from available energy
+              Uout_ideal = sqrt(2.0_WP*Ecrit/m1)
+           else
+              Acont = Acont*(a_bons + b_bons*(wel/wcrit)**c_bons)
+              KEn2 = KEn1 - this%gamma*Acont
+              Uout_ideal = sqrt(2.0_WP*KEn1/m1)
+           end if
+        
+           ! Compute rebound velocity (check for sticking)
+           if (KEn2.lt.0.0_WP) then
+              Uout = 0.0_WP
+           else
+              Uout = sqrt(2.0_WP*KEn2/m1)
+           end if
+           
+           ! Tangential rebound velocity TODO: Modify by cos^2(alpha) (see eq 13 and discussion in Bons 2017)
+           Utan = rtv - this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
+
+           ! Set rebound velocity
+           this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+
+           ! If the particle sticks don't move it!
+           if (Uout.eq.0.0_WP) then
+              this%p(i1)%flag = -1
+              this%p(i1)%vel=0.0_WP
+           end if
+        end if
+
+        ! collide with ib
+        if (present(gib)) then
+           d12=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),s=gib,bc='n')
+           n12(1)=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),s=nxib,bc='n')
+           n12(2)=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),s=nyib,bc='n')
+           n12(3)=this%cfg%get_scalar(pos=this%p(i1)%pos,i0=this%p(i1)%ind(1),j0=this%p(i1)%ind(2),k0=this%p(i1)%ind(3),s=nzib,bc='n')
+           buf = sqrt(sum(n12*n12))+epsilon(1.0_WP)
+           n12 = -n12/buf
+           rnv=dot_product(v1,n12)
+           r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
+           delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
+
+           ! assess if there is collision
+           if (delta_n.gt.0.0_WP) then
+              ! normal collision
+              k_n=m1*k_coeff_w
+              eta_n=m1*eta_coeff_w
+              f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+              ! tangential collision
+              f_t=0.0_WP
+              if (this%mu_f.gt.0.0_WP) then
+                 t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
+                 rtv = sqrt(sum(t12*t12))
+                 if (rnv*dt/d1.gt.aclipnorm) then
+                    if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+                 else
+                    if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
+                 end if
+                 if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+              end if
+              ! calculate collision force
+              f_n=f_n/m1; f_t=f_t/m1
+              this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
+              ! calculate collision torque
+              this%p(i1)%tcol=this%p(i1)%tcol+cross_product(0.5_WP*d1*n12,f_t)
+           end if
+        end if
+
+        ! loop over nearest cells
+        do kk=this%p(i1)%ind(3)-1,this%p(i1)%ind(3)+1
+           do jj=this%p(i1)%ind(2)-1,this%p(i1)%ind(2)+1
+              do ii=this%p(i1)%ind(1)-1,this%p(i1)%ind(1)+1
+
+                 ! loop over particles in that cell
+                 do nn=1,npic(ii,jj,kk)
+
+                    ! get index of neighbor particle
+                    i2=ipic(nn,ii,jj,kk)
+
+                    ! get relevant data from correct storage
+                    if (i2.gt.0) then
+                       r2=this%p(i2)%pos
+                       v2=this%p(i2)%vel
+                       w2=this%p(i2)%angvel
+                       d2=this%p(i2)%d
+                       m2=this%rho*pi/6.0_WP*d2**3
+                    else if (i2.lt.0) then
+                       i2=-i2
+                       r2=this%g(i2)%pos
+                       v2=this%g(i2)%vel
+                       w2=this%g(i2)%angvel
+                       d2=this%g(i2)%d
+                       m2=this%rho*pi/6.0_WP*d2**3
+                    end if
+
+                    ! compute relative information
+                    d12=norm2(r1-r2)
+                    if (d12.lt.10.0_WP*epsilon(d12)) cycle !< this should skip auto-collision
+                    n12=(r2-r1)/d12
+                    v12=v1-v2
+                    rnv=dot_product(v12,n12)
+                    r_influ=min(abs(rnv)*dt,0.1_WP*(d1+d2))
+                    delta_n=min(0.5_WP*(d1+d2)+r_influ-d12,this%clip_col*0.5_WP*(d1+d2))
+
+                    ! Conditions for the collision 
+                    isOverlap = delta_n.gt.0.0_WP  ! Are the particles overlapped?
+
+                    ! Check if the particles have been colliding
+                    i = findloc(this%p(i1)%colId, value=i2, dim=1)
+                    if (i.ne.0) then
+                       ! Check if particles have separated
+                       if (delta_n.lt.-delta_c) this%p(i1)%colId(i)=0
+                       isCol = this%p(i1)%colId(i).eq.i2
+                    else
+                       isCol = .false.
+                    end if
+
+                    ! assess if there is collision
+                    if (isOverlap.or.isCol) then
+                       ! Store particle 2 ID if this is the first step of the collision
+                       if (isOverlap.and..not.isCol) then
+                          i = findloc(this%p(i1)%colId, value=0, dim=1)
+                          if (i.eq.0) call die("[lpt collide_marshall] Error: Too many particle-particle collisions!")
+                          this%p(i1)%colId(i)=i2
+                       end if
+                       ! normal collision
+                       a = 1.0_WP
+                       call find_contact_radius(a, delta_n, delta_c, numiter) 
+                       eta_n = 2.0_WP*alpha*SQRT(m1*this%E*a*a_c/3.0_WP)
+                       f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12 - eta_n*rnv*n12
+                       ! tangential collision
+                       f_t=0.0_WP
+                       if (this%mu_f.gt.0.0_WP) then
+                          t12 = v12-rnv*n12+cross_product(0.5_WP*(d1*w1+d2*w2),n12)
+                          rtv = sqrt(sum(t12*t12))
+                          if (rnv*dt*2.0_WP/(d1+d2).gt.aclipnorm) then
+                             if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
+                          else
+                             if (rtv*dt*2.0_WP/(d1+d2).lt.acliptan) rtv=0.0_WP
+                          end if
+                          if (rtv.gt.0.0_WP) f_t=-this%mu_f*sqrt(sum(f_n*f_n))*t12/rtv
+                       end if
+                       ! calculate collision force
+                       f_n=f_n/m1; f_t=f_t/m1
+                       this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
+                       ! calculate collision torque
+                       this%p(i1)%tcol=this%p(i1)%tcol+cross_product(0.5_WP*d1*n12,f_t)
+                       this%p(i1)%debug(2)=f_n(1)*m1
+                       ! add up the collisions
+                       this%ncol=this%ncol+1
+                    end if
+                    
+                 end do
+
+              end do
+           end do
+        end do
+
+        ! deal with dimensionality
+        if (this%cfg%nx.eq.1) then
+           this%p(i1)%acol(1)=0.0_WP
+           this%p(i1)%tcol(2)=0.0_WP
+           this%p(i1)%tcol(3)=0.0_WP
+        end if
+        if (this%cfg%ny.eq.1) then
+           this%p(i1)%tcol(1)=0.0_WP
+           this%p(i1)%acol(2)=0.0_WP
+           this%p(i1)%tcol(3)=0.0_WP
+        end if
+        if (this%cfg%nz.eq.1) then
+           this%p(i1)%tcol(1)=0.0_WP
+           this%p(i1)%tcol(2)=0.0_WP
+           this%p(i1)%acol(3)=0.0_WP
+        end if
+
+     end do collision
+
+     ! determine total number of collisions
+     call mpi_allreduce(this%ncol,nn,1,mpi_integer,mpi_sum,this%cfg%comm,ierr); this%ncol=nn/2
+
+   end block collision_force
+
+   ! clean up
+   if (allocated(npic)) deallocate(npic)
+   if (allocated(ipic)) deallocate(ipic)
+
+   contains
+
+     ! Newton-Raphson root find of the particle contact radius
+     subroutine find_contact_radius(x, delta_n, delta_c, numiter) 
+      implicit none
+      real(WP), intent(inout) :: x
+      real(WP), intent(in) :: delta_n, delta_c
+      real(WP) :: h, tolerance
+      integer, intent(inout) :: numiter
+
+      ! Set tolerance for newton raphson
+      tolerance=real(1E-10, WP)
+
+      ! Get initial error and zero out iteration counter
+      numiter = 0
+      h = contact(x, delta_n, delta_c) / ddx_contact(x)
+
+      ! Loop until the zero is close enough
+      do while (abs(h).gt.tolerance)
+         h = contact(x, delta_n, delta_c) / ddx_contact(x)
+         x = x - h
+         numiter = numiter + 1
+      end do
+     end subroutine find_contact_radius
+
+     ! Function whose root is the contact radius
+     function contact(a, delta_n, delta_c) result(fx)
+      implicit none
+      real(WP), intent(in) :: delta_n, delta_c
+      real(WP) :: fx, a
+      fx = 6.0_WP**(1.0_WP/3.0_WP)*(2.0_WP*a**2 - 4.0_WP/3.0_WP*SQRT(a)) - delta_n/delta_c
+     end function contact
+
+     ! Derivative of the above function
+     function ddx_contact(a) result(fx)
+      implicit None
+      real(WP) :: fx, a
+      fx = 6.0_WP**(1.0_WP/3.0_WP)*(4.0_WP*a - 2.0_WP/(3.0_WP*SQRT(a)))
+     end function ddx_contact
+
+
+ end subroutine collide_bons
+
   !> Advance the particle equations by a specified time step dt
   !> p%id=0 => no coll, no solve
   !> p%id=-1=> no coll, no move
@@ -1191,9 +1683,9 @@ contains
        if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
        if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
        ! Handle particles that have left the domain
-       ! if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
-       ! if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
-       ! if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
+       if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
+       if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
+       if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
        ! Relocalize the particle
        myp%ind=this%cfg%get_ijk_global(myp%pos,myp%ind)
        ! Count number of particles removed
@@ -1221,8 +1713,62 @@ contains
          if (verbose.gt.0) call log(message)
       end if
     end block logging
+    
+   !  contains
+
+   !    ! Bounce-stick model from Bons (2017) "OSU Model"
+   !    function get_osu_model_cor(p, Un) result(CoRn)
+   !       implicit none
+   !       type(part), intent(in) :: p
+   !       real(WP), intent(in) :: Un
+   !       real(WP) :: a, b, c
+   !       real(WP) :: r, m, vol, KEn1, KEn2, Ecrit, ell, wel, wcrit, wmax, Acont, Uout, CoRn 
+
+   !       ! Parameters for fit (from Bons)
+   !       a = 0.1_WP
+   !       b = 1.0_WP/7.0_WP
+   !       c = 0.5_WP
+
+   !       ! Geometric and physical parameters
+   !       r = 0.5_WP*p%d
+   !       ell = 2.0_WP/3.0_WP*p%d
+   !       Acont = PI*r**2
+   !       vol = PI*p%d**3/6.0_WP
+   !       m = this%rho*vol
+
+   !       ! Initial normal kinetic energy
+   !       KEn1 = 0.5_WP*m*Un**2
+
+   !       ! Deformation
+   !       wel   = sqrt(16.0_WP*KEn1/(3.0_WP*PI*p%d*this%E))
+   !       wcrit = this%sigma_y*ell/this%E
+
+   !       ! Max elastic energy available for rebound
+   !       Ecrit = 0.5_WP*(this%E*Acont/ell)*wcrit**2
+
+   !       ! If plastic deformation occurs
+   !       if (wel.gt.wcrit) then
+   !          wmax = ell - exp(log(ell - wcrit) - (KEn1 - Ecrit)/(this%sigma_y*vol))
+   !          Acont = Acont*(a + b*(wmax/wcrit)**c) ! Contact area modified by adhesion
+   !          KEn2 = Ecrit - this%gamma*Acont       ! Remove work of adhesion from available energy
+   !       else
+   !          Acont = Acont*(a + b*(wel/wcrit)**c)
+   !          KEn2 = KEn1 - this%gamma*Acont
+   !       end if
+        
+   !       ! Compute rebound velocity (check for sticking)
+   !       if (KEn2.lt.0.0_WP) then
+   !          Uout = 0.0_WP
+   !       else
+   !          Uout = sqrt(2.0_WP*KEn2/m)
+   !       end if
+
+   !       ! Compute normal coefficient of restitution
+   !       CoRn = Uout/Un
+   !    end function get_osu_model_cor
 
   end subroutine advance
+
 
 
   !> Calculate RHS of the particle ODEs
