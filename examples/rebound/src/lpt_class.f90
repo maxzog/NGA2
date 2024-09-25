@@ -1229,8 +1229,8 @@ contains
      real(WP) :: d1,m1,d2,m2,d12,m12,buf
      real(WP), dimension(3) :: r1,v1,w1,r2,v2,w2,v12,n12,f_n,t12,f_t
      real(WP) :: k_n,eta_n,k_coeff,eta_coeff,k_coeff_w,eta_coeff_w,rnv,r_influ,delta_n,rtv
-     real(WP) :: a_bons, b_bons, c_bons
-     real(WP) :: r, vol, KEn1, KEn2, Ecrit, ell, wel, wcrit, wmax, Acont, Uout, CoRn, Utan, Uout_ideal 
+     real(WP) :: a_bons,b_bons,c_bons
+     real(WP) :: r,vol,KEn1,KEn2,Ecrit,ell,wel,wcrit,wmax,Acont,Uout,CoRn,Utan,Uout_ideal,theta 
      real(WP) :: f_c, a_c, a, delta_c, alpha
      real(WP), parameter :: aclipnorm=1.0e-6_WP
      real(WP), parameter :: acliptan=1.0e-9_WP
@@ -1283,6 +1283,15 @@ contains
 
         ! assess if there is collision
         if (isOverlap) then
+           ! Tangential velocity and angle of incidence (measured from the wall)
+           t12 = v1-rnv*n12
+           rtv = sqrt(sum(t12*t12))
+           if (rtv.gt.0.0_WP) then
+              theta = atan(rnv/rtv)
+           else
+              theta = 0.5_WP*PI
+           end if
+
            ! Initial normal kinetic energy
            KEn1 = 0.5_WP*m1*rnv**2
 
@@ -1294,15 +1303,14 @@ contains
            Ecrit = 0.5_WP*(this%E*Acont/ell)*wcrit**2
 
            ! If plastic deformation occurs
-           ! TODO: Modify adhesion by sin(alpha) (see second paragraph on pg 5 of Bons 2017)
            if (wel.gt.wcrit) then
               wmax = ell - exp(log(ell - wcrit) - (KEn1 - Ecrit)/(this%sigma_y*vol))
               Acont = Acont*(a_bons + b_bons*(wmax/wcrit)**c_bons) ! Contact area modified by adhesion
-              KEn2 = Ecrit - this%gamma*Acont                      ! Remove work of adhesion from available energy
+              KEn2 = Ecrit - this%gamma*Acont*sin(theta)           ! Remove work of adhesion from available energy
               Uout_ideal = sqrt(2.0_WP*Ecrit/m1)
            else
               Acont = Acont*(a_bons + b_bons*(wel/wcrit)**c_bons)
-              KEn2 = KEn1 - this%gamma*Acont
+              KEn2 = KEn1 - this%gamma*Acont*sin(theta)
               Uout_ideal = sqrt(2.0_WP*KEn1/m1)
            end if
         
@@ -1313,11 +1321,15 @@ contains
               Uout = sqrt(2.0_WP*KEn2/m1)
            end if
            
-           ! Tangential rebound velocity TODO: Modify by cos^2(alpha) (see eq 13 and discussion in Bons 2017)
-           Utan = rtv - this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
+           ! Tangential rebound velocity 
+           Utan = rtv - cos(theta)**2*this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
 
            ! Set rebound velocity
-           this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+           if (rtv.gt.0.0_WP) then
+              this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+           else
+              this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 
+           end if
 
            ! If the particle sticks don't move it!
            if (Uout.eq.0.0_WP) then
@@ -1338,6 +1350,15 @@ contains
 
         ! assess if there is collision 
         if (isOverlap) then
+           ! Tangential velocity and angle of incidence (measured from the wall)
+           t12 = v1-rnv*n12
+           rtv = sqrt(sum(t12*t12))
+           if (rtv.gt.0.0_WP) then
+              theta = atan(rnv/rtv)
+           else
+              theta = 0.5_WP*PI
+           end if
+
            ! Initial normal kinetic energy
            KEn1 = 0.5_WP*m1*rnv**2
 
@@ -1349,15 +1370,14 @@ contains
            Ecrit = 0.5_WP*(this%E*Acont/ell)*wcrit**2
 
            ! If plastic deformation occurs
-           ! TODO: Modify adhesion by sin(alpha) (see second paragraph on pg 5 of Bons 2017)
            if (wel.gt.wcrit) then
               wmax = ell - exp(log(ell - wcrit) - (KEn1 - Ecrit)/(this%sigma_y*vol))
               Acont = Acont*(a_bons + b_bons*(wmax/wcrit)**c_bons) ! Contact area modified by adhesion
-              KEn2 = Ecrit - this%gamma*Acont                      ! Remove work of adhesion from available energy
+              KEn2 = Ecrit - this%gamma*Acont*sin(theta)           ! Remove work of adhesion from available energy
               Uout_ideal = sqrt(2.0_WP*Ecrit/m1)
            else
               Acont = Acont*(a_bons + b_bons*(wel/wcrit)**c_bons)
-              KEn2 = KEn1 - this%gamma*Acont
+              KEn2 = KEn1 - this%gamma*Acont*sin(theta)
               Uout_ideal = sqrt(2.0_WP*KEn1/m1)
            end if
         
@@ -1368,11 +1388,15 @@ contains
               Uout = sqrt(2.0_WP*KEn2/m1)
            end if
            
-           ! Tangential rebound velocity TODO: Modify by cos^2(alpha) (see eq 13 and discussion in Bons 2017)
-           Utan = rtv - this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
+           ! Tangential rebound velocity 
+           Utan = rtv - cos(theta)**2*this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
 
            ! Set rebound velocity
-           this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+           if (rtv.gt.0.0_WP) then
+              this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+           else
+              this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 
+           end if
 
            ! If the particle sticks don't move it!
            if (Uout.eq.0.0_WP) then
@@ -1393,6 +1417,15 @@ contains
 
         ! assess if there is collision
         if (isOverlap) then
+           ! Tangential velocity and angle of incidence (measured from the wall)
+           t12 = v1-rnv*n12
+           rtv = sqrt(sum(t12*t12))
+           if (rtv.gt.0.0_WP) then
+              theta = atan(rnv/rtv)
+           else
+              theta = 0.5_WP*PI
+           end if
+
            ! Initial normal kinetic energy
            KEn1 = 0.5_WP*m1*rnv**2
 
@@ -1404,15 +1437,14 @@ contains
            Ecrit = 0.5_WP*(this%E*Acont/ell)*wcrit**2
 
            ! If plastic deformation occurs
-           ! TODO: Modify adhesion by sin(alpha) (see second paragraph on pg 5 of Bons 2017)
            if (wel.gt.wcrit) then
               wmax = ell - exp(log(ell - wcrit) - (KEn1 - Ecrit)/(this%sigma_y*vol))
               Acont = Acont*(a_bons + b_bons*(wmax/wcrit)**c_bons) ! Contact area modified by adhesion
-              KEn2 = Ecrit - this%gamma*Acont                      ! Remove work of adhesion from available energy
+              KEn2 = Ecrit - this%gamma*Acont*sin(theta)           ! Remove work of adhesion from available energy
               Uout_ideal = sqrt(2.0_WP*Ecrit/m1)
            else
               Acont = Acont*(a_bons + b_bons*(wel/wcrit)**c_bons)
-              KEn2 = KEn1 - this%gamma*Acont
+              KEn2 = KEn1 - this%gamma*Acont*sin(theta)
               Uout_ideal = sqrt(2.0_WP*KEn1/m1)
            end if
         
@@ -1423,11 +1455,15 @@ contains
               Uout = sqrt(2.0_WP*KEn2/m1)
            end if
            
-           ! Tangential rebound velocity TODO: Modify by cos^2(alpha) (see eq 13 and discussion in Bons 2017)
-           Utan = rtv - this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
+           ! Tangential rebound velocity 
+           Utan = rtv - cos(theta)**2*this%impulse_ratio*(rnv + Uout_ideal)*(Uout/Uout_ideal)
 
            ! Set rebound velocity
-           this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+           if (rtv.gt.0.0_WP) then
+              this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 - (rtv + Utan)*t12/rtv
+           else
+              this%p(i1)%vel = this%p(i1)%vel - (rnv + Uout)*n12 
+           end if
 
            ! If the particle sticks don't move it!
            if (Uout.eq.0.0_WP) then
