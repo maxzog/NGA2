@@ -100,13 +100,14 @@ contains
       call param_read('Shear modulus',lp%Eshear)
       call param_read('Free surface energy',lp%gamma)
       call param_read('Yield strength',lp%sigma_y)
+      lp%hard_sphere=.true.
+      lp%hardsphere_model='tn'
       if (lp%cfg%amRoot) then
          dx=lp%cfg%xL/np
-         dtheta=90.0_WP/np
+         dtheta=89.0_WP/np
          call lp%resize(np)
          do i=1,np
-            ! print *, (i-1)*dtheta+1.0_WP
-            print *, i*v0
+            ! print *, i*v0
             ! Initialize with one particle
             lp%p(i)%d=d
             lp%p(i)%col=0
@@ -115,8 +116,11 @@ contains
             lp%p(i)%debug=0.0_WP
             lp%p(i)%id=int(i,8)
             lp%p(i)%delta_t=0.0_WP
+            ! lp%p(i)%vel=i*v0*[0.0_WP, -1.0_WP, 0.0_WP]
+            ! lp%p(i)%vel=v0*[20.0_WP*COSD(60.0_WP), -SIND(60.0_WP), 0.0_WP]
             ! lp%p(i)%vel=v0*[COSD((i-1)*dtheta+1.0_WP), -SIND((i-1)*dtheta+1.0_WP), 0.0_WP]
-            lp%p(i)%vel=i*v0*[0.0_WP, -1.0_WP, 0.0_WP]
+            lp%p(i)%vel=[0.0_WP, -1.0_WP, 0.0_WP]*10.0_WP**(-2.0_WP+i*4.0_WP/np)
+            print *, lp%p(i)%vel(2)
             lp%p(i)%Acol=0.0_WP
             lp%p(i)%Tcol=0.0_WP
             lp%p(i)%dt=time%dt
@@ -223,7 +227,7 @@ contains
        call time%increment()
 
        ! Collide particles
-       call lp%collide_bons(dt=time%dt)
+       if (.not.lp%hard_sphere) call lp%collide(dt=time%dt)
 
        ! Advance particles by dt
        call lp%advance(dt=time%dt)
@@ -238,7 +242,7 @@ contains
                pmesh%var(1,i)=real(lp%p(i)%id,WP)
                pmesh%var(2,i)=lp%p(i)%d
                pmesh%vec(:,1,i)=lp%p(i)%vel
-               pmesh%vec(:,2,i)=lp%p(i)%debug
+               pmesh%vec(:,2,i)=lp%p(i)%angVel
             end do
           end block update_pmesh
           call ens_out%write_data(time%t)
@@ -250,7 +254,7 @@ contains
        call mfile%write()
        call cflfile%write()
         
-       if (save_count.gt.1000) call die("Done!")
+       if (save_count.gt.250) call die("Done!")
     end do
 
   end subroutine simulation_run
