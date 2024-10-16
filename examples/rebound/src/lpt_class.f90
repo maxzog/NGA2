@@ -20,12 +20,21 @@ module lpt_class
 
   !> I/O chunk size to read at a time
   integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
+  integer, parameter :: MAX_COLS=10
+
+  !> Particle collision object definition
+  type :: cols
+     integer :: coulomb
+     integer(kind=8), dimension(-2:MAX_COLS) :: colId
+     real(WP), dimension(3, 3+MAX_COLS)      :: delta_t
+  end type cols
 
   !> Basic particle object definition
   type :: part
      !> MPI_INTEGER8 data
      integer(kind=8) :: id                     !< Particle ID
      integer(kind=8) :: numCol                 !< Number of particle-particle collisions
+     integer(kind=8) :: coulomb                !< Flag to check if sliding(1) or sticking(0) 
      integer(kind=8), dimension(-2:6) :: col   !< Is the particle colliding? One per coordinate for now. 
      integer(kind=8), dimension(1:6)  :: colId !< Colliding neighbor particle ID
      !> MPI_DOUBLE_PRECISION data
@@ -44,7 +53,7 @@ module lpt_class
   end type part
   !> Number of blocks, block length, and block types in a particle
   integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[11,31,4]
+  integer           , dimension(part_nblock) :: part_lblock=[12,31,4]
   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART
@@ -84,6 +93,7 @@ module lpt_class
      real(WP) :: lambda=1.59_WP                          !< Ratio of yield pressure to yield stress 
      real(WP) :: Ca=1.59_WP                              !< Constant for Marshall's 2018 hard-sphere model (Eq 16)
      real(WP) :: Trelax=1.59_WP                          !< Material relaxation time (Marshall 2018 Eq 16)
+     real(WP) :: visc_f                                  !< Fluid dynamic viscosity
 
      ! Gravitational acceleration
      real(WP), dimension(3) :: gravity=0.0_WP            !< Acceleration of gravity
@@ -510,21 +520,33 @@ contains
         delta_n=min(0.5_WP*d1+r_influ-d12,10.0_WP)!this%clip_col*0.5_WP*d1)
         ! Assess if there is collision
         if (delta_n.gt.0.0_WP) then
-           ! Normal collision
+           ! Set material parameters
            eta_n=0.0_WP
-           k_n=real(100E+06,WP)
-           f_n=-k_n*delta_n*n12-eta_n*rnv*n12
+           eta_t=0.0_WP
+           k_n=real(100E+05,WP)
+           k_t=real(100E+05,WP)
+           ! Tangential velocity
+           t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)                       ! Tangential relative velocity at contact
+           rtv=sqrt(sum(t12*t12))                                               ! Magnitude of relative tangential velocity
+           ! Normal collision
+           f_n=-k_n*delta_n*n12 - eta_n*rnv*n12
            ! Tangential collision
            f_t=0.0_WP
-           k_t=real(100E+06,WP)
-           eta_t=0.0_WP
-           t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)                       ! Tangential relative velocity at contact
-           rtv = sqrt(sum(t12*t12))                                               ! Magnitude of relative tangential velocity
-           this%p(i1)%delta_t = this%p(i1)%delta_t + k_t*t12*dt
-           if (norm2(this%p(i1)%delta_t).ge.this%mu_f*norm2(f_n)) then
-              if (rtv.gt.0.0_WP) this%p(i1)%delta_t = this%mu_f*norm2(f_n)*t12/rtv
+           ! Update displacement if not sliding
+           if (this%p(i1)%coulomb.eq.0) this%p(i1)%delta_t=this%p(i1)%delta_t + t12*dt
+           f_t=-k_t*this%p(i1)%delta_t
+           ! If switching back to spring-dashpot from sliding, zero out the displacement
+           if (this%p(i1)%coulomb.eq.1.and.norm2(f_t).lt.this%mu_f*norm2(f_n)) then
+              this%p(i1)%coulomb=0
+              this%p(i1)%delta_t=0.5_WP*this%p(i1)%delta_t
+              f_t=-k_t*this%p(i1)%delta_t
+           ! Check if in Coulomb (sliding) regime
+           elseif (norm2(f_t).ge.this%mu_f*norm2(f_n)) then
+              if (rtv.gt.0.0_WP) then 
+                 f_t=-this%mu_f*norm2(f_n)*t12/rtv
+                 this%p(i1)%coulomb=1
+              end if
            end if
-           f_t = -this%p(i1)%delta_t - eta_t*t12
            ! Calculate collision force
            f_n=f_n/m1; f_t=f_t/m1
            this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
@@ -811,6 +833,9 @@ contains
         alpha = 1.2728_WP - 4.2783_WP*this%e_n + 11.087_WP*this%e_n**2 - 22.348_WP*this%e_n**3 + &
               & 27.467_WP*this%e_n**4 - 18.022_WP*this%e_n**5 + 4.8218_WP*this%e_n**6
 
+
+        alpha=0.8_WP*0.144_WP
+
         ! collide with walls in x
         d12=abs(this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1))
         n12=[sign(1.0_WP,this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1)),0.0_WP,0.0_WP]
@@ -879,40 +904,9 @@ contains
            if (norm2(this%p(i1)%delta_t).gt.this%mu_f*norm2(f_n)) then
               if (rtv.gt.0.0_WP) then
                  this%p(i1)%delta_t = f_n*t12/rtv
-            !   else
-            !      this%p(i1)%delta_t = 0.0_WP
               end if
            end if
-           f_t = this%p(i1)%delta_t
-         !   if (this%mu_f.gt.0.0_WP) then
-         !      ! Relative velocity at contact
-         !      t12 = v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)
-         !      rtv = sqrt(sum(t12*t12))
-         !      if (rnv*dt/d1.gt.aclipnorm) then
-         !         if (rtv/rnv.lt.rcliptan) rtv=0.0_WP
-         !      else
-         !         if (rtv*dt/d1.lt.acliptan) rtv=0.0_WP
-         !      end if
-         !      if (rtv.gt.0.0_WP) then 
-         !          ! Elastic & damping tangential contact
-         !          Ff_damp=-k_t*this%p(i1)%delta_t - eta_t*t12
-         !          ! Sliding tangential contact
-         !          Ff_slip=-this%mu_f*norm2(f_n)
-         !          ! Check which regime we're in
-         !          if (norm2(Ff_damp).gt.norm2(Ff_slip)) then
-         !             f_t=Ff_slip*t12/rtv
-         !             this%p(i1)%delta_t = -Ff_slip*t12/rtv
-         !          else
-         !             ! Only update the contact displacement if not sliding 
-         !             this%p(i1)%delta_t = this%p(i1)%delta_t + t12*dt
-         !             f_t=Ff_damp
-         !          end if 
-         !          ! Debug storage
-         !          this%p(i1)%debug(1) = Ff_damp(1)
-         !          this%p(i1)%debug(2) = -this%mu_f*norm2(f_n)
-         !          this%p(i1)%debug(3) = this%p(i1)%delta_t(1)
-         !       end if
-         !   end if
+           f_t = 0.0_WP 
            ! calculate collision force
            f_n=f_n - eta_n*rnv*n12 ! Dissipation not included in friction calculation
            f_n=f_n/m1; f_t=f_t/m1
@@ -1299,7 +1293,7 @@ contains
            else if (rnv.lt.vyield) then
                e_n = sqrt(1.0_WP - vcvi**2)
            else
-               e_n = sqrt(sqrt(3.0_WP)*(1.0_WP - 1.0_WP/6.0_WP*vyvi**2)*sqrt(vyvi/(vyvi + 2.0_WP*sqrt(1.2_WP + 0.2_WP*vyvi**2))) - vcvi**2) 
+               e_n = sqrt(6.0_WP*sqrt(3.0_WP)/5.0_WP*(1.0_WP - 1.0_WP/6.0_WP*vyvi**2)*sqrt(vyvi/(vyvi + 2.0_WP*sqrt(1.2_WP - 0.2_WP*vyvi**2))) - vcvi**2) 
            end if
 
            e_t = 1.0_WP - this%mu_f*(1.0_WP + e_n)*tan(theta)
@@ -2140,8 +2134,8 @@ contains
     class(lpt), intent(inout) :: this
     real(WP), intent(inout) :: dt  !< Timestep size over which to advance
     type(part) :: myp,pold
-    real(WP), dimension(3) :: n12
-    real(WP) :: mydt,dt_done,Ip,d12,rnv,r_influ,delta_n
+    real(WP), dimension(3) :: n12,relocation_displacement,pvel_before_col
+    real(WP) :: mydt,dt_done,Ip,d12,rnv,r_influ,delta_n,dt0
     integer :: i,ierr
 
     ! Zero out number of particles removed
@@ -2172,29 +2166,49 @@ contains
 
           !> Hard-sphere wall collisions
           if (this%hard_sphere) then
+             ! Reset displacement correction 
+             relocation_displacement=0.0_WP
              ! collide with walls in x
+             pvel_before_col=myp%vel
              d12=abs(this%xwall(myp%ind(1),myp%ind(2),myp%ind(3))-myp%pos(1))
              n12=[sign(1.0_WP,this%xwall(myp%ind(1),myp%ind(2),myp%ind(3))-myp%pos(1)),0.0_WP,0.0_WP]
              rnv=dot_product(myp%vel,n12)
              r_influ=min(2.0_WP*abs(rnv)*mydt,0.2_WP*myp%d)
              delta_n=min(0.5_WP*myp%d+r_influ-d12,this%clip_col*0.5_WP*myp%d)
-             if (delta_n.gt.0.0_WP) call this%binary_collide(myp,n12)
+             if (delta_n.gt.0.0_WP) then
+               call this%binary_collide(myp,n12)
+               dt0=delta_n/rnv
+               relocation_displacement=relocation_displacement+(myp%vel - pvel_before_col)*dt0
+             end if
 
              ! collide with walls in y
+             pvel_before_col=myp%vel
              d12=abs(this%ywall(myp%ind(1),myp%ind(2),myp%ind(3))-myp%pos(2))
              n12=[0.0_WP,sign(1.0_WP,this%ywall(myp%ind(1),myp%ind(2),myp%ind(3))-myp%pos(2)),0.0_WP]
              rnv=dot_product(myp%vel,n12)
              r_influ=min(2.0_WP*abs(rnv)*mydt,0.2_WP*myp%d)
              delta_n=min(0.5_WP*myp%d+r_influ-d12,this%clip_col*0.5_WP*myp%d)
-             if (delta_n.gt.0.0_WP) call this%binary_collide(myp,n12)
+             if (delta_n.gt.0.0_WP) then
+               call this%binary_collide(myp,n12)
+               dt0=delta_n/rnv
+               relocation_displacement=relocation_displacement+(myp%vel - pvel_before_col)*dt0
+             end if
 
              ! collide with walls in z
+             pvel_before_col=myp%vel
              d12=abs(this%zwall(myp%ind(1),myp%ind(2),myp%ind(3))-myp%pos(3))
              n12=[0.0_WP,0.0_WP,sign(1.0_WP,this%zwall(myp%ind(1),myp%ind(2),myp%ind(3))-myp%pos(3))]
              rnv=dot_product(myp%vel,n12)
              r_influ=min(2.0_WP*abs(rnv)*mydt,0.2_WP*myp%d)
              delta_n=min(0.5_WP*myp%d+r_influ-d12,this%clip_col*0.5_WP*myp%d)
-             if (delta_n.gt.0.0_WP) call this%binary_collide(myp,n12)
+             if (delta_n.gt.0.0_WP) then
+               call this%binary_collide(myp,n12)
+               dt0=delta_n/rnv
+               relocation_displacement=relocation_displacement+(myp%vel - pvel_before_col)*dt0
+             end if
+
+             ! Correct position after hard-sphere collisions
+             myp%pos=myp%pos+relocation_displacement
           end if
 
           ! Relocalize
@@ -2206,7 +2220,7 @@ contains
        if (this%cfg%xper) myp%pos(1)=this%cfg%x(this%cfg%imin)+modulo(myp%pos(1)-this%cfg%x(this%cfg%imin),this%cfg%xL)
        if (this%cfg%yper) myp%pos(2)=this%cfg%y(this%cfg%jmin)+modulo(myp%pos(2)-this%cfg%y(this%cfg%jmin),this%cfg%yL)
        if (this%cfg%zper) myp%pos(3)=this%cfg%z(this%cfg%kmin)+modulo(myp%pos(3)-this%cfg%z(this%cfg%kmin),this%cfg%zL)
-      !  ! Handle particles that have left the domain
+       ! Handle particles that have left the domain
        if (myp%pos(1).lt.this%cfg%x(this%cfg%imin).or.myp%pos(1).gt.this%cfg%x(this%cfg%imax+1)) myp%flag=1
        if (myp%pos(2).lt.this%cfg%y(this%cfg%jmin).or.myp%pos(2).gt.this%cfg%y(this%cfg%jmax+1)) myp%flag=1
        if (myp%pos(3).lt.this%cfg%z(this%cfg%kmin).or.myp%pos(3).gt.this%cfg%z(this%cfg%kmax+1)) myp%flag=1
@@ -2428,7 +2442,8 @@ contains
     case('marshall')
       marshall_model: block
          real(WP), dimension(3) :: t12
-         real(WP) :: rnv,rtv,theta,K,vol,m,d1,d2,d3,d4,d5,vstari,bve,e_ve,W0,e_vea,e_p,e_n,e_t,Avisc,vyield,vyvi,py
+         real(WP) :: rnv,rtv,theta,K,vol,m,d1,d2,d3,d4,d5,vstari,bve,e_ve,W0,e_vea,e_p,e_n,e_t,Avisc,vyield,vstick,vyvi,py
+         real(WP) :: Stkc, delta_gap, x0
          ! Normal velocity
          rnv=dot_product(p%vel,n12)
          ! Tangential velocity and angle of incidence (measured from the wall)
@@ -2439,33 +2454,57 @@ contains
          else
             theta = 0.5_WP*PI
          end if
+         ! Squeeze-film
+         Stkc=this%rho*rnv*p%d/(9.0_WP*this%visc_f)
+         delta_gap=0.001_WP
+         x0=0.01_WP
          ! Stiffness and mass
          K=4.0_WP*this%E*sqrt(0.5_WP*p%d)/3.0_WP
+         ! K=2.0_WP/3.0_WP*this%E/(1.0_WP - this%nu**2)*sqrt(0.5_WP*p%d)
          vol=PI*p%d**3/6.0_WP
          m=this%rho*vol
          py=this%lambda*this%sigma_y
-         vyield=(0.5_WP*PI/this%E)**2*(8.0_WP*PI*(0.5_WP*p%d)**3/(15.0_WP*m))**(0.2_WP)*py**(2.5_WP)
+         vyield=1.56_WP*sqrt(py**5/(this%E**4*this%rho))
+         vstick=sqrt(14.18_WP/m)*(this%gamma**5*(0.5_WP*p%d)**4/this%E**2)**(1.0_WP/6.0_WP)
          vyvi=vyield/rnv
          Avisc=this%Ca*this%Trelax/this%nu**2
          ! Coefficients for dissipation CoR approximant
-         d1=2.582_WP
+         d1=2.583_WP
          d2=3.583_WP
-         d3=2.932_WP
+         d3=2.983_WP
          d4=1.148_WP
          d5=0.326_WP
          ! Dissipation CoR
          vstari=sqrt(PI)/(50.0_WP**0.2_WP)*gamma(3.0_WP/5.0_WP)/gamma(21.0_WP/10.0_WP)*1.5_WP*Avisc*(K/m)**(0.4_WP)
-         bve=rnv*vstari
+         bve=vstari*rnv**0.2_WP
          e_ve=(1.0_WP + d1*bve)/(1.0_WP + d2*bve + d3*bve**2 + d4*bve**3 + d5*bve**4)
          ! Work of adhesion
-         W0=0.5782_WP*(9.0_WP*PI**5*this%gamma**5*(0.5_WP*p%d)**4/(16.0_WP*this%E**2))**(1.0_WP/3.0_WP)
+         W0=0.5782_WP*(3.0_WP**5.0_WP*9.0_WP*PI**5*this%gamma**5*(0.5_WP*p%d)**4/(16.0_WP*this%E**2))**(1.0_WP/3.0_WP)
          ! Combined dissipation and adhesion CoR
-         e_vea=sqrt(e_ve**2 - 2.0_WP*W0/(m*rnv**2))
+         e_vea=e_ve**2 - 2.0_WP*W0/(m*rnv**2)
+         if (e_vea.lt.0.0_WP) then
+            e_vea=0.0_WP
+         else
+            e_vea=sqrt(e_vea)
+         end if
          ! Thornton & Ning plastic deformation CoR (no adhesion)
-         e_p=sqrt(6.0_WP*sqrt(3.0_WP)/5.0_WP)*sqrt(1.0_WP - 1.0_WP/6.0_WP*vyvi**2)*(vyvi/(vyvi + 2.0_WP/sqrt(5.0)*sqrt(6.0_WP - vyvi**2)))**(0.25_WP)
-         ! Totoal coefficient of restitution
-         e_n=sqrt(e_vea**2 + e_p**2 - 1.0_WP)
+         if (vyvi.lt.1.0_WP) then
+            e_p=sqrt(6.0_WP*sqrt(3.0_WP)/5.0_WP)*sqrt(1.0_WP - 1.0_WP/6.0_WP*vyvi**2)*(vyvi/(vyvi + 2.0_WP/sqrt(5.0)*sqrt(6.0_WP - vyvi**2)))**(0.25_WP)
+         else
+            e_p=1.0_WP
+         end if
+         ! Total coefficient of restitution
+         ! Check if the particle sticks (e_n < 0)
+         e_n=e_vea**2 + e_p**2 - 1.0_WP
+         if (e_n.lt.0.0_WP) then
+            e_n=0.0_WP
+         else
+            e_n=sqrt(e_n)
+         end if
+         ! Tangential coefficient of restitution
          e_t=1.0_WP - this%mu_f*(1.0_WP + e_n)*tan(theta)
+         ! If the particle rebounds, apply squeeze-film reduction
+         if (e_n.gt.epsilon(1.0_WP)) e_n=e_n + (1.0_WP + e_n)/Stkc*log(delta_gap/x0)
          ! Set rebound velocity
          if (rtv.gt.0.0_WP) then
             p%vel = p%vel - (rnv + e_n*rnv)*n12 - (rtv + e_t*rtv)*t12/rtv

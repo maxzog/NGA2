@@ -101,7 +101,12 @@ contains
       call param_read('Free surface energy',lp%gamma)
       call param_read('Yield strength',lp%sigma_y)
       lp%hard_sphere=.true.
-      lp%hardsphere_model='tn'
+      lp%hardsphere_model='marshall'
+      lp%nu=0.3_WP
+      lp%Trelax=0.085_WP
+      lp%Ca=real(0.8E-09,WP)
+      lp%lambda=1.0_WP
+      lp%visc_f=real(2.5E-05, WP)
       if (lp%cfg%amRoot) then
          dx=lp%cfg%xL/np
          dtheta=89.0_WP/np
@@ -116,10 +121,11 @@ contains
             lp%p(i)%debug=0.0_WP
             lp%p(i)%id=int(i,8)
             lp%p(i)%delta_t=0.0_WP
+            lp%p(i)%coulomb=0
             ! lp%p(i)%vel=i*v0*[0.0_WP, -1.0_WP, 0.0_WP]
             ! lp%p(i)%vel=v0*[20.0_WP*COSD(60.0_WP), -SIND(60.0_WP), 0.0_WP]
             ! lp%p(i)%vel=v0*[COSD((i-1)*dtheta+1.0_WP), -SIND((i-1)*dtheta+1.0_WP), 0.0_WP]
-            lp%p(i)%vel=[0.0_WP, -1.0_WP, 0.0_WP]*10.0_WP**(-2.0_WP+i*4.0_WP/np)
+            lp%p(i)%vel=[0.0_WP, -1.0_WP, 0.0_WP]*10.0_WP**(i*2.0_WP/np)
             print *, lp%p(i)%vel(2)
             lp%p(i)%Acol=0.0_WP
             lp%p(i)%Tcol=0.0_WP
@@ -194,7 +200,7 @@ contains
       call mfile%add_column(pos(2),'Particle Y')
       call mfile%add_column(pos(3),'Particle Z')
       call mfile%add_column(vel(1),'Particle U')
-      call mfile%add_column(vel(2),'Particle V')
+      call mfile%add_column(lp%p(1)%vel(2),'Particle V')
       call mfile%add_column(vel(3),'Particle W')
       call mfile%add_column(angvel(1),'Particle WX')
       call mfile%add_column(angvel(2),'Particle WY')
@@ -227,7 +233,7 @@ contains
        call time%increment()
 
        ! Collide particles
-       if (.not.lp%hard_sphere) call lp%collide(dt=time%dt)
+       if (.not.lp%hard_sphere) call lp%collide_marshall(dt=time%dt)
 
        ! Advance particles by dt
        call lp%advance(dt=time%dt)
@@ -254,7 +260,7 @@ contains
        call mfile%write()
        call cflfile%write()
         
-       if (save_count.gt.250) call die("Done!")
+       if (save_count.gt.30) call die("Done!")
     end do
 
   end subroutine simulation_run
