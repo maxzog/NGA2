@@ -2,7 +2,7 @@
 Partition :	1 1 1
 
 # Mesh definition
-Lx : 1.0
+Lx : 25.0
 Ly : 0.1
 Lz : 0.1
 nx : 2
@@ -10,26 +10,54 @@ ny : 2
 nz : 2
 
 # Time integration
-Max timestep size :	1e-10
+Max timestep size :	1e-8
 Max cfl number :	1
 
 # Particle parameters
-Gravity :   0 0 0
-Particle diameter :         5e-6 
-Particle density :          2320 #1350
-Particle position :         2.6e-6 #0.0 0.00251 0.0
-Particle velocity :         0.8 #1.95 -3.377 0
-Number of particles :       100
+Gravity : 0 0 0 
+Hard sphere collisions : .false.
+Hard sphere model : thornton
 
-Elastic modulus :     70.8E+09
-Shear modulus :       500E+06
-Yield strength :        200e6 #400E+06
-Free surface energy : 0.8 #0.17
+# ## Marshall JKR
+# Elastic modulus :       1.35E+09
+# Shear modulus :         2.268E+10
+# Yield strength :        200e6 
+# Free surface energy :   0.17
+
+# Particle diameter :         4.9e-6 
+# Particle density :          2320
+# Particle position :         25.01e-6 
+# Particle velocity :         0.2 
+# Number of particles :       100 
+
+## Marshall hard sphere
+Elastic modulus :       1.4718E+09
+Shear modulus :         2.268E+10
+Yield strength :        177e6 
+Free surface energy :   0.31
+
+Particle diameter :         5e-2
+Particle density :          1350
+Particle position :         2.5001e-2
+Particle velocity :         5 
+Number of particles :       250 
+
+# ## Bons
+# Elastic modulus :       70.8E+09
+# Shear modulus :         2.268E+10
+# Yield strength :        200e6 
+# Free surface energy :   0.8
+
+# Particle diameter :         5e-6 
+# Particle density :          2320
+# Particle position :         25.01e-6 
+# Particle velocity :         1
+# Number of particles :       80 
 
 # Particle collisions
-Coefficient of restitution :    0.84
+Coefficient of restitution :    1.0
 Wall restitution :              1.0
-Friction coefficient :          0.092
+Friction coefficient :          0.1
 
 # Ensight output
-Ensight output period :1e-8
+Ensight output period :1e-6

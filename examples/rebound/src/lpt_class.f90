@@ -20,40 +20,33 @@ module lpt_class
 
   !> I/O chunk size to read at a time
   integer, parameter :: part_chunk_size=1000  !< Read 1000 particles at a time before redistributing
-  integer, parameter :: MAX_COLS=10
-
-  !> Particle collision object definition
-  type :: cols
-     integer :: coulomb
-     integer(kind=8), dimension(-2:MAX_COLS) :: colId
-     real(WP), dimension(3, 3+MAX_COLS)      :: delta_t
-  end type cols
+  integer, parameter :: MAX_COL=6             !< Maxmimum number of particle-particle collisions
 
   !> Basic particle object definition
   type :: part
      !> MPI_INTEGER8 data
-     integer(kind=8) :: id                     !< Particle ID
-     integer(kind=8) :: numCol                 !< Number of particle-particle collisions
-     integer(kind=8) :: coulomb                !< Flag to check if sliding(1) or sticking(0) 
-     integer(kind=8), dimension(-2:6) :: col   !< Is the particle colliding? One per coordinate for now. 
-     integer(kind=8), dimension(1:6)  :: colId !< Colliding neighbor particle ID
+     integer(kind=8) :: id                       !< Particle ID
+     integer(kind=8) :: numCol                   !< Number of particle-particle collisions
+     integer(kind=8), dimension(-2:MAX_COL) :: coulomb !< Flag to check if sliding(1) or sticking(0) 
+     integer(kind=8), dimension(-2:0) :: colWall !< Wall collide IDs (one per coordinate) 
+     integer(kind=8), dimension(1:MAX_COL)  :: colId   !< Colliding neighbor particle ID
      !> MPI_DOUBLE_PRECISION data
-     real(WP) :: d                        !< Particle diameter
-     real(WP), dimension(3) :: delta_t    !< Collision overlap
-     real(WP), dimension(3) :: pos        !< Particle center coordinates
-     real(WP), dimension(3) :: debug      !< Data storage for debug 
-     real(WP), dimension(3) :: vel        !< Velocity of particle
-     real(WP), dimension(3) :: angVel     !< Angular velocity of particle
-     real(WP), dimension(3) :: Acol       !< Collision acceleration
-     real(WP), dimension(3) :: Tcol       !< Collision torque
-     real(WP) :: dt                       !< Time step size for the particle
+     real(WP) :: d                               !< Particle diameter
+     real(WP), dimension(3) :: pos               !< Particle center coordinates
+     real(WP), dimension(3) :: vel               !< Velocity of particle
+     real(WP), dimension(3) :: angVel            !< Angular velocity of particle
+     real(WP), dimension(3) :: Acol              !< Collision acceleration
+     real(WP), dimension(3) :: Tcol              !< Collision torque
+     real(WP) :: dt                              !< Time step size for the particle
+     real(WP), dimension(3,-2:MAX_COL) :: delta_t      !< Collision overlap
+     real(WP), dimension(3) :: debug
      !> MPI_INTEGER data
-     integer , dimension(3) :: ind        !< Index of cell containing particle center
-     integer  :: flag                     !< Control parameter (0=normal, 1=done->will be removed)
+     integer , dimension(3) :: ind               !< Index of cell containing particle center
+     integer  :: flag                            !< Control parameter (0=normal, 1=done->will be removed)
   end type part
   !> Number of blocks, block length, and block types in a particle
   integer, parameter                         :: part_nblock=3
-  integer           , dimension(part_nblock) :: part_lblock=[12,31,4]
+  integer           , dimension(part_nblock) :: part_lblock=[2+6+2*MAX_COL,29+3*MAX_COL,4]
   type(MPI_Datatype), dimension(part_nblock) :: part_tblock=[MPI_INTEGER8,MPI_DOUBLE_PRECISION,MPI_INTEGER]
   !> MPI_PART derived datatype and size
   type(MPI_Datatype) :: MPI_PART
@@ -101,6 +94,7 @@ module lpt_class
      ! Solver parameters
      real(WP) :: nstep=1                                   !< Number of substeps (default=1)
      character(len=str_medium), public :: drag_model       !< Drag model
+     character(len=str_medium), public :: lift_model       !< Lift model
      character(len=str_medium), public :: hardsphere_model !< Hard sphere collision model
      logical, public :: hard_sphere                        !< T/F - use hard sphere collisions
      
@@ -516,15 +510,15 @@ contains
         n12=[0.0_WP,sign(1.0_WP,this%ywall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(2)),0.0_WP]
         rnv=dot_product(v1,n12)
         r_influ=min(2.0_WP*abs(rnv)*dt,0.2_WP*d1)
-        r_influ=0.0_WP
+      !   r_influ=0.0_WP
         delta_n=min(0.5_WP*d1+r_influ-d12,10.0_WP)!this%clip_col*0.5_WP*d1)
         ! Assess if there is collision
         if (delta_n.gt.0.0_WP) then
            ! Set material parameters
            eta_n=0.0_WP
            eta_t=0.0_WP
-           k_n=real(100E+05,WP)
-           k_t=real(100E+05,WP)
+           k_n=real(100E+06,WP)
+           k_t=real(100E+06,WP)
            ! Tangential velocity
            t12=v1-rnv*n12+cross_product(0.5_WP*d1*w1,n12)                       ! Tangential relative velocity at contact
            rtv=sqrt(sum(t12*t12))                                               ! Magnitude of relative tangential velocity
@@ -533,20 +527,21 @@ contains
            ! Tangential collision
            f_t=0.0_WP
            ! Update displacement if not sliding
-           if (this%p(i1)%coulomb.eq.0) this%p(i1)%delta_t=this%p(i1)%delta_t + t12*dt
-           f_t=-k_t*this%p(i1)%delta_t
+           if (this%p(i1)%coulomb(-1).eq.0) this%p(i1)%delta_t(:,-1)=this%p(i1)%delta_t(:,-1) + t12*dt
+           f_t=-k_t*this%p(i1)%delta_t(:,-1)
            ! If switching back to spring-dashpot from sliding, zero out the displacement
-           if (this%p(i1)%coulomb.eq.1.and.norm2(f_t).lt.this%mu_f*norm2(f_n)) then
-              this%p(i1)%coulomb=0
-              this%p(i1)%delta_t=0.5_WP*this%p(i1)%delta_t
-              f_t=-k_t*this%p(i1)%delta_t
+           if (this%p(i1)%coulomb(-1).eq.1.and.norm2(f_t).lt.this%mu_f*norm2(f_n)) then
+              this%p(i1)%coulomb(-1)=0
+              this%p(i1)%delta_t(:,-1)=this%p(i1)%delta_t(:,-1) + t12*dt
+              f_t=-k_t*this%p(i1)%delta_t(:,-1)
            ! Check if in Coulomb (sliding) regime
            elseif (norm2(f_t).ge.this%mu_f*norm2(f_n)) then
-              if (rtv.gt.0.0_WP) then 
-                 f_t=-this%mu_f*norm2(f_n)*t12/rtv
-                 this%p(i1)%coulomb=1
-              end if
+              f_t=-this%mu_f*norm2(f_n)*this%p(i1)%delta_t(:,-1)/norm2(this%p(i1)%delta_t(:,-1))
+              this%p(i1)%coulomb(-1)=1
            end if
+           this%p(i1)%debug(1)=real(this%p(i1)%coulomb(-1), WP)
+           this%p(i1)%debug(2)=f_t(1)
+           this%p(i1)%debug(3)=delta_n !this%p(i1)%delta_t(1,-1)
            ! Calculate collision force
            f_n=f_n/m1; f_t=f_t/m1
            this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
@@ -833,9 +828,6 @@ contains
         alpha = 1.2728_WP - 4.2783_WP*this%e_n + 11.087_WP*this%e_n**2 - 22.348_WP*this%e_n**3 + &
               & 27.467_WP*this%e_n**4 - 18.022_WP*this%e_n**5 + 4.8218_WP*this%e_n**6
 
-
-        alpha=0.8_WP*0.144_WP
-
         ! collide with walls in x
         d12=abs(this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1))
         n12=[sign(1.0_WP,this%xwall(this%p(i1)%ind(1),this%p(i1)%ind(2),this%p(i1)%ind(3))-this%p(i1)%pos(1)),0.0_WP,0.0_WP]
@@ -844,13 +836,13 @@ contains
         delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
 
         ! Conditions for the collision
-        isOverlap = delta_n.gt.0.0_WP                ! Is the particle overlapped?
-        if (delta_n.lt.-delta_c) this%p(i1)%col(0)=0 ! Has the particle necked?
-        isCol = this%p(i1)%col(0).eq.1               ! Is the particle colliding but not overlapped?
+        isOverlap = delta_n.gt.0.0_WP                    ! Is the particle overlapped?
+        if (delta_n.lt.-delta_c) this%p(i1)%colWall(0)=0 ! Has the particle necked?
+        isCol = this%p(i1)%colWall(0).eq.1               ! Is the particle colliding but not overlapped?
 
         ! assess if there is collision
         if (isOverlap.or.isCol) then
-           this%p(i1)%col(0)=1
+           this%p(i1)%colWall(0)=1
            ! normal collision
            a = 1.0_WP
            call find_contact_radius(a, delta_n, delta_c, numiter) 
@@ -884,13 +876,13 @@ contains
         delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
         
         ! Conditions for the collision
-        isOverlap = delta_n.gt.0.0_WP                 ! Is the particle overlapped?
-        if (delta_n.lt.-delta_c) this%p(i1)%col(-1)=0 ! Has the particle necked?
-        isCol = this%p(i1)%col(-1).eq.1               ! Is the particle colliding but not overlapped?
+        isOverlap = delta_n.gt.0.0_WP                     ! Is the particle overlapped?
+        if (delta_n.lt.-delta_c) this%p(i1)%colWall(-1)=0 ! Has the particle necked?
+        isCol = this%p(i1)%colWall(-1).eq.1               ! Is the particle colliding but not overlapped?
 
         ! assess if there is collision 
         if (isOverlap.or.isCol) then
-           this%p(i1)%col(-1)=1
+           this%p(i1)%colWall(-1)=1
            ! normal collision
            a = 1.0_WP
            call find_contact_radius(a, delta_n, delta_c, numiter) 
@@ -900,12 +892,12 @@ contains
            f_n=-4.0_WP*f_c*(a**3 - a**1.5_WP)*n12
            ! tangential collision
            f_t=0.0_WP
-           this%p(i1)%delta_t = this%p(i1)%delta_t + t12*dt
-           if (norm2(this%p(i1)%delta_t).gt.this%mu_f*norm2(f_n)) then
-              if (rtv.gt.0.0_WP) then
-                 this%p(i1)%delta_t = f_n*t12/rtv
-              end if
-           end if
+         !   this%p(i1)%delta_t = this%p(i1)%delta_t + t12*dt
+         !   if (norm2(this%p(i1)%delta_t).gt.this%mu_f*norm2(f_n)) then
+         !      if (rtv.gt.0.0_WP) then
+         !         this%p(i1)%delta_t = f_n*t12/rtv
+         !      end if
+         !   end if
            f_t = 0.0_WP 
            ! calculate collision force
            f_n=f_n - eta_n*rnv*n12 ! Dissipation not included in friction calculation
@@ -923,13 +915,13 @@ contains
         delta_n=min(0.5_WP*d1+r_influ-d12,this%clip_col*0.5_WP*d1)
         
         ! Conditions for the collision
-        isOverlap = delta_n.gt.0.0_WP                 ! Is the particle overlapped?
-        if (delta_n.lt.-delta_c) this%p(i1)%col(-2)=0 ! Has the particle necked?
-        isCol = this%p(i1)%col(-2).eq.1               ! Is the particle colliding but not overlapped?
+        isOverlap = delta_n.gt.0.0_WP                     ! Is the particle overlapped?
+        if (delta_n.lt.-delta_c) this%p(i1)%colWall(-2)=0 ! Has the particle necked?
+        isCol = this%p(i1)%colWall(-2).eq.1               ! Is the particle colliding but not overlapped?
 
         ! assess if there is collision
         if (isOverlap.or.isCol) then
-           this%p(i1)%col(-2)=1
+           this%p(i1)%colWall(-2)=1
            ! normal collision
            a = 1.0_WP
            call find_contact_radius(a, delta_n, delta_c, numiter) 
@@ -1072,7 +1064,6 @@ contains
                        this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
                        ! calculate collision torque
                        this%p(i1)%tcol=this%p(i1)%tcol+cross_product(0.5_WP*d1*n12,f_t)
-                       this%p(i1)%debug(2)=f_n(1)*m1
                        ! add up the collisions
                        this%ncol=this%ncol+1
                     end if
@@ -1524,7 +1515,6 @@ contains
                        this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
                        ! calculate collision torque
                        this%p(i1)%tcol=this%p(i1)%tcol+cross_product(0.5_WP*d1*n12,f_t)
-                       this%p(i1)%debug(2)=f_n(1)*m1
                        ! add up the collisions
                        this%ncol=this%ncol+1
                     end if
@@ -2044,7 +2034,6 @@ contains
                        this%p(i1)%acol=this%p(i1)%acol+f_n+f_t
                        ! calculate collision torque
                        this%p(i1)%tcol=this%p(i1)%tcol+cross_product(0.5_WP*d1*n12,f_t)
-                       this%p(i1)%debug(2)=f_n(1)*m1
                        ! add up the collisions
                        this%ncol=this%ncol+1
                     end if
@@ -2255,22 +2244,24 @@ contains
 
 
   !> Calculate RHS of the particle ODEs
-  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,p,acc,opt_dt)
+  subroutine get_rhs(this,U,V,W,rho,visc,stress_x,stress_y,stress_z,vort,gradu,p,acc,opt_dt)
     implicit none
     class(lpt), intent(inout) :: this
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: U         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: V         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: W         !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: rho       !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: visc      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: stress_x  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: stress_y  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:  ), intent(inout) :: stress_z  !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: vort      !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(:,:,this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: gradu   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     type(part), intent(in) :: p
     real(WP), dimension(3), intent(out) :: acc
     real(WP), intent(out) :: opt_dt
     real(WP) :: fvisc,frho,pVF,fVF
-    real(WP), dimension(3) :: fvel,fstress
+    real(WP), dimension(3) :: fvel,fstress,fvort
 
     ! Interpolate fluid quantities to particle location
     interpolate: block
@@ -2281,6 +2272,10 @@ contains
       ! Interpolate the fluid phase viscosity to the particle location
       fvisc=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=visc,bc='n')
       fvisc=fvisc+epsilon(1.0_WP)
+      ! Interpolate the fluid phase vorticity to the particle location
+      fvort(1)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=vort(1,:,:,:),bc='n')
+      fvort(2)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=vort(2,:,:,:),bc='n')
+      fvort(3)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=vort(3,:,:,:),bc='n')
       ! Interpolate the fluid phase density to the particle location
       frho=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=rho,bc='n')
       ! Interpolate the particle volume fraction to the particle location
@@ -2290,7 +2285,7 @@ contains
 
     ! Compute acceleration due to drag
     compute_drag: block
-      real(WP) :: Re,tau,corr,b1,b2
+      real(WP) :: Re,tau,corr,b1,b2,alpha,beta,h
       ! Particle Reynolds number
       Re=frho*norm2(p%vel-fvel)*p%d/fvisc+epsilon(1.0_WP)
       ! Drag correction
@@ -2301,6 +2296,12 @@ contains
          corr=1.0_WP
       case('Schiller-Naumann','Schiller Naumann','SN')
          corr=1.0_WP+0.15_WP*Re**(0.687_WP)
+      case('Bala 2009', 'Zeng 2009')
+         call get_wall_distance(h) 
+         h=h/p%d-0.5_WP ! Dimensionless distance between particle and wall
+         alpha=0.15_WP-0.046_WP*(1.0_WP-0.16_WP*h**2)*exp(-0.7_WP*h)
+         beta=0.687_WP+0.066_WP*(1.0_WP-0.76_WP*h**2)*exp(-h**0.9_WP)
+         corr=(1.0_WP+0.137_WP*exp(-2.0_WP*h)+9.0_WP/(16.0_WP*(1.0_WP+2.0_WP*h)))*(1.0_WP+alpha*Re**beta)
       case('Tenneti')
          ! Tenneti and Subramaniam (2011)
          b1=5.81_WP*pVF/fVF**3+0.48_WP*pVF**(1.0_WP/3.0_WP)/fVF**4
@@ -2316,6 +2317,113 @@ contains
       opt_dt=tau/real(this%nstep,WP)
     end block compute_drag
 
+    ! Compute acceleration due to Saffman lift
+    compute_lift: block
+      use mathtools, only: Pi,cross_product
+      real(WP) :: omegag,Cl,Reg,Reh,G,h,delta,alpha,beta,lambda,CLSw,CLS
+      real(WP), dimension(3) :: accl
+      omegag=sqrt(sum(fvort**2))
+      if (omegag.gt.0.0_WP) then
+        Reg=p%d**2*omegag*frho/fvisc
+        select case(trim(this%lift_model))
+        case('Saffman')
+           Cl=9.69_WP/Pi/p%d**2/this%rho*fvisc*sqrt(Reg)
+           accl=Cl*cross_product(fvel-p%vel,fvort/omegag)
+        case('Bala')
+           call get_shear_rate(h,G)
+           Reh=frho*p%d*G*h/fvisc
+           delta=h/p%d-0.5_WP
+           alpha=-exp(-0.3_WP+0.025_WP*Reh)
+           beta=0.8_WP+0.01_WP*Reh
+           lambda=(1.0_WP-exp(-delta))*(Reh/250.0_WP)**2.5_WP
+           CLSw=3.663_WP/(Reh**2+0.1173_WP)**0.22_WP
+           CLS=CLSw*exp(-0.5_WP*delta*(Reh/250.0_WP)**(4.0_WP/3.0_WP))*(exp(alpha*delta**beta)-lambda)
+           accl=0.75_WP*frho/this%rho*CLS*cross_product(fvel-p%vel,fvort)
+        end select
+        acc =acc +accl
+        opt_dt=min(opt_dt,1.0_WP/(Cl*real(this%nstep,WP)))
+      end if
+    end block compute_lift
+
+    contains
+
+    !> Compute the distance from the particle to the nearest wall
+    subroutine get_wall_distance(dmin)
+       implicit none
+       real(WP), intent(inout) :: dmin
+       real(WP), dimension(3) :: n12,nmin
+       real(WP) :: d12
+       dmin=huge(1.0_WP)
+       ! Check distance to walls in x
+       d12=abs(this%xwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(1))
+       if (d12.lt.dmin) then
+          dmin=d12
+       end if
+       ! Check distance to walls in y
+       d12=abs(this%ywall(p%ind(1),p%ind(2),p%ind(3))-p%pos(2))
+       if (d12.lt.dmin) then
+          dmin=d12
+       end if
+       ! Check distance to walls in z
+       d12=abs(this%zwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(3))
+       if (d12.lt.dmin) then
+          dmin=d12
+       end if
+    end subroutine get_wall_distance
+
+    !> Compute minimum wall distance and wall-normal shear rate
+    subroutine get_shear_rate(dmin,shear_rate)
+       implicit none
+       real(WP), intent(inout)  :: dmin,shear_rate
+       real(WP), dimension(3,3) :: fgradu
+       real(WP), dimension(3)   :: n12,nmin
+       real(WP) :: d12
+       integer :: i,j
+       dmin=huge(1.0_WP)
+
+       ! Check distance to walls in x
+       d12=abs(this%xwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(1))
+       n12=[sign(1.0_WP,this%xwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(1)),0.0_WP,0.0_WP]
+       if (d12.lt.dmin) then
+          dmin=d12
+          nmin=n12
+       end if
+       ! Check distance to walls in y
+       d12=abs(this%ywall(p%ind(1),p%ind(2),p%ind(3))-p%pos(2))
+       n12=[0.0_WP,sign(1.0_WP,this%ywall(p%ind(1),p%ind(2),p%ind(3))-p%pos(2)),0.0_WP]
+       if (d12.lt.dmin) then
+          dmin=d12
+          nmin=n12
+       end if
+       ! Check distance to walls in z
+       d12=abs(this%zwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(3))
+       n12=[0.0_WP,0.0_WP,sign(1.0_WP,this%zwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(3))]
+       if (d12.lt.dmin) then
+          dmin=d12
+          nmin=n12
+       end if
+       
+       ! Interpolate velocity gradient to particle location
+       fgradu(1,1)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(1,1,:,:,:),bc='n')
+       fgradu(1,2)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(1,2,:,:,:),bc='n')
+       fgradu(1,3)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(1,3,:,:,:),bc='n')
+       fgradu(2,1)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(2,1,:,:,:),bc='n')
+       fgradu(2,2)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(2,2,:,:,:),bc='n')
+       fgradu(2,3)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(2,3,:,:,:),bc='n')
+       fgradu(3,1)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(3,1,:,:,:),bc='n')
+       fgradu(3,2)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(3,2,:,:,:),bc='n')
+       fgradu(3,3)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(3,3,:,:,:),bc='n')
+
+       ! Project gradU onto the wall-normal and extract wall-normal components
+       ! Quadratic form :: nmin^T * gradU * nmin
+       shear_rate=0.0_WP
+       do j=1,3
+         do i=1,3
+            shear_rate = shear_rate + nmin(i)*fgradu(i,j)*nmin(j)
+         end do
+       end do
+    end subroutine get_shear_rate
+
   end subroutine get_rhs
 
   !> Hard-sphere wall collision using model specified by lpt%hardsphere_model
@@ -2328,6 +2436,15 @@ contains
     real(WP), dimension(3), intent(in) :: n12
 
     select case(lowercase(this%hardsphere_model))
+    case('allstick','stick')
+      p%vel=0.0_WP
+      p%flag=-1
+    case('reflect','elastic')
+      reflect_particle: block
+         real(WP) :: rnv
+         rnv=dot_product(p%vel,n12)
+         p%vel = p%vel - 2.0_WP*rnv*n12
+      end block reflect_particle
     case('bons','osu')
       bons_model: block
          real(WP), dimension(3) :: t12
@@ -2384,7 +2501,7 @@ contains
          else
             p%vel = p%vel - (rnv + Uout)*n12 
          end if
-         ! If the particle sticks don't move it! TODO: Optional relocation displacement
+         ! If the particle sticks don't move it!
          if (Uout.lt.10.0_WP*epsilon(1.0_WP)) then
             p%flag = -1
             p%vel=0.0_WP
@@ -2400,9 +2517,6 @@ contains
          py = this%lambda*this%sigma_y                                                              ! Yield pressure at contact
          vcrit  = 1.84_WP*( (2.0_WP*this%gamma/p%d)**5 / (this%rho**3*this%E**2) )**(1.0_WP/6.0_WP)  ! Sticking velocity
          vyield = 1.56_WP*sqrt( py**5 / (this%E**4*this%rho) )                                      ! Yielding velocity
-         py=real(1e9, WP)
-         vcrit=0.016_WP
-         vyield=0.045_WP
          ! Tangential velocity and angle of incidence (measured from the wall)
          t12 = p%vel-rnv*n12
          rtv = sqrt(sum(t12*t12))
