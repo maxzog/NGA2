@@ -331,9 +331,6 @@ contains
          type(bcond), pointer :: mybc
          ! Create flow solver
          fs=incomp(cfg=cfg,name='NS solver')
-         ! Define boundary conditions
-         call fs%add_bcond(name='bottom',type=dirichlet,locator=bottom_of_domain,face='y',dir=-1,canCorrect=.false.)
-         call fs%add_bcond(name='top',type=dirichlet,locator=top_of_domain,face='y',dir=+1,canCorrect=.false. )
          ! Assign constant viscosity
          call param_read('Dynamic viscosity',visc); fs%visc=visc
          ! Assign constant density
@@ -363,25 +360,12 @@ contains
             do k=fs%cfg%kmino_,fs%cfg%kmaxo_
                do j=fs%cfg%jmino_,fs%cfg%jmaxo_
                   do i=fs%cfg%imino_,fs%cfg%imaxo_
-                     !if (fs%umask(i,j,k).eq.0) fs%U(i,j,k)=fs%U(i,j,k)+amp*vel*cos(16.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)!*random_normal(m=0.0_WP,sd=0.5_WP)
-                     !if (fs%wmask(i,j,k).eq.0) fs%W(i,j,k)=fs%W(i,j,k)+amp*vel*cos(16.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)!*random_normal(m=0.0_WP,sd=0.5_WP)
-                     if (fs%umask(i,j,k).eq.0)fs%U(i,j,k)=fs%U(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)*cos(8.0_WP*twoPi*fs%cfg%ym(j)/fs%cfg%yL)
-                     if (fs%wmask(i,j,k).eq.0)fs%W(i,j,k)=fs%W(i,j,k)+Ubulk*random_uniform(lo=-0.5_WP*amp,hi=0.5_WP*amp)+amp*Ubulk*cos(8.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)
+                     if (fs%umask(i,j,k).eq.0) fs%U(i,j,k)=fs%U(i,j,k)+amp*vel*cos(16.0_WP*twoPi*fs%cfg%zm(k)/fs%cfg%zL)!*random_normal(m=0.0_WP,sd=0.5_WP)
+                     if (fs%wmask(i,j,k).eq.0) fs%W(i,j,k)=fs%W(i,j,k)+amp*vel*cos(16.0_WP*twoPi*fs%cfg%xm(i)/fs%cfg%xL)!*random_normal(m=0.0_WP,sd=0.5_WP)
                   end do
                end do
             end do
          end if
-         ! Set no-slip walls
-         call fs%get_bcond('bottom',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%V(i,j,k)=0.0_WP
-         end do
-         call fs%get_bcond('top',mybc)
-         do n=1,mybc%itr%no_
-            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            fs%V(i,j,k)=0.0_WP
-         end do
          ! Calculate cell-centered velocities and divergence
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
@@ -609,23 +593,6 @@ contains
 
             ! Apply other boundary conditions on the resulting fields
             call fs%apply_bcond(time%t,time%dt)
-
-            ! Reset Dirichlet BCs
-            dirichlet_velocity: block
-              use incomp_class, only: bcond
-              type(bcond), pointer :: mybc
-              integer :: n,i,j,k
-              call fs%get_bcond('bottom',mybc)
-              do n=1,mybc%itr%no_
-                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                 fs%V(i,j,k)=0.0_WP
-              end do
-              call fs%get_bcond('top',mybc)
-              do n=1,mybc%itr%no_
-                 i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-                 fs%V(i,j,k)=0.0_WP
-              end do
-            end block dirichlet_velocity
 
             ! Solve Poisson equation
             call fs%correct_mfr()
