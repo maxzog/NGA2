@@ -1,5 +1,5 @@
 # Parallelization
-Partition :	1 6 6
+Partition :	1 1 1
 
 # Mesh definition
 Lx :	1.25664
@@ -18,12 +18,12 @@ Wbulk : 0
 Perturbation : 0.25
 
 # Particles
-Number of particles : 1064026
-Particle density : 1300
+Particles per group : 2
+Particle diameters  : 0.1 0.2 0.3 0.4 0.5
+Particle density    : 1300
 # tau_p+ = 25
 # Particle diameter : 0.0004388 
 # tau_p+ = 0.063 (Ahmadi)
-Particle diameter : 0.000484 #3952912
 
 # Time integration
 Max timestep size : 0.001658 # dt = 0.06 * \frac{\nu}{u_{\tau}^2} 
@@ -36,4 +36,4 @@ Postproc output period : 25.0
 
 # Restart output
 Restart output period : 5.0
-Restart from : steady #1.00000E+02
+Restart from : # 
