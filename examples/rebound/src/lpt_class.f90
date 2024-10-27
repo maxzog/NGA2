@@ -2380,7 +2380,9 @@ contains
        real(WP) :: d12
        integer :: i,j
        dmin=huge(1.0_WP)
+       nmin=0.0_WP
 
+       !! Find the nearest wall and the associate wall-normal vector
        ! Check distance to walls in x
        d12=abs(this%xwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(1))
        n12=[sign(1.0_WP,this%xwall(p%ind(1),p%ind(2),p%ind(3))-p%pos(1)),0.0_WP,0.0_WP]
@@ -2403,6 +2405,7 @@ contains
           nmin=n12
        end if
        
+       !! Compute shear rate using velocity gradient
        ! Interpolate velocity gradient to particle location
        fgradu(1,1)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(1,1,:,:,:),bc='n')
        fgradu(1,2)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(1,2,:,:,:),bc='n')
@@ -2415,7 +2418,6 @@ contains
        fgradu(3,3)=this%cfg%get_scalar(pos=p%pos,i0=p%ind(1),j0=p%ind(2),k0=p%ind(3),S=gradu(3,3,:,:,:),bc='n')
 
        ! Project gradU onto the wall-normal and extract wall-normal components
-       ! Quadratic form :: nmin^T * gradU * nmin
        shear_rate=0.0_WP
        do j=1,3
          do i=1,3
