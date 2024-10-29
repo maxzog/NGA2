@@ -526,22 +526,22 @@ contains
            f_n=-k_n*delta_n*n12 - eta_n*rnv*n12
            ! Tangential collision
            f_t=0.0_WP
-           ! Update displacement if not sliding
-           if (this%p(i1)%coulomb(-1).eq.0) this%p(i1)%delta_t(:,-1)=this%p(i1)%delta_t(:,-1) + t12*dt
-           f_t=-k_t*this%p(i1)%delta_t(:,-1)
-           ! If switching back to spring-dashpot from sliding, zero out the displacement
-           if (this%p(i1)%coulomb(-1).eq.1.and.norm2(f_t).lt.this%mu_f*norm2(f_n)) then
-              this%p(i1)%coulomb(-1)=0
-              this%p(i1)%delta_t(:,-1)=this%p(i1)%delta_t(:,-1) + t12*dt
-              f_t=-k_t*this%p(i1)%delta_t(:,-1)
-           ! Check if in Coulomb (sliding) regime
-           elseif (norm2(f_t).ge.this%mu_f*norm2(f_n)) then
-              f_t=-this%mu_f*norm2(f_n)*this%p(i1)%delta_t(:,-1)/norm2(this%p(i1)%delta_t(:,-1))
-              this%p(i1)%coulomb(-1)=1
+           ! Increment tangential overlap
+           this%p(i1)%delta_t(:,-1)=this%p(i1)%delta_t(:,-1)+t12*dt
+           if (norm2(this%p(i1)%delta_t(:,-1)).gt.0.0_WP) then
+             ! Compute spring-dashpot force
+             f_t=-k_t*this%p(i1)%delta_t(:,-1) - eta_t*t12
+             ! Check if we should be using Coulomb friction instead
+             if (norm2(f_t).gt.this%mu_f*norm2(f_n)) then
+                ! Compute Coulomb force
+                f_t=-this%mu_f*norm2(f_n)*this%p(i1)%delta_t(:,-1)/norm2(this%p(i1)%delta_t(:,-1))
+                ! Set overlap s.t. the spring-dashpot force equals the Coulomb force
+                this%p(i1)%delta_t(:,-1)=this%mu_f*norm2(f_n)/k_t*this%p(i1)%delta_t(:,-1)/norm2(this%p(i1)%delta_t(:,-1))
+             end if
+           else
+             ! If there's no overlap (zero tangential velocity) there's no tangential force
+             f_t=0.0_WP
            end if
-           this%p(i1)%debug(1)=real(this%p(i1)%coulomb(-1), WP)
-           this%p(i1)%debug(2)=f_t(1)
-           this%p(i1)%debug(3)=delta_n !this%p(i1)%delta_t(1,-1)
            ! Calculate collision force
            f_n=f_n/m1; f_t=f_t/m1
            this%p(i1)%Acol=this%p(i1)%Acol+f_n+f_t
