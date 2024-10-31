@@ -101,12 +101,13 @@ contains
       call param_read('Free surface energy',lp%gamma)
       call param_read('Yield strength',lp%sigma_y)
       call param_read('Hard sphere collisions',lp%hard_sphere)
-      call param_read('Hard sphere model',lp%hardsphere_model)
+      ! call param_read('Collision model',lp%collision_model)
       lp%nu=0.3_WP
       lp%Trelax=0.085_WP
       lp%Ca=real(0.8E-09,WP)
       lp%lambda=1.59_WP
       lp%visc_f=real(2.5E-05, WP)
+      lp%tau_col=20.0_WP*time%dtmax
       if (lp%cfg%amRoot) then
          dx=lp%cfg%xL/np
          dtheta=89.0_WP/np
@@ -121,12 +122,11 @@ contains
             lp%p(i)%id=int(i,8)
             lp%p(i)%delta_t=0.0_WP
             lp%p(i)%coulomb=0
-            lp%p(i)%debug=0.0_WP
             ! lp%p(i)%vel=i*v0*[0.0_WP, -1.0_WP, 0.0_WP]
             ! lp%p(i)%vel=v0*[COSD(80.0_WP), -SIND(80.0_WP), 0.0_WP]
             lp%p(i)%vel=v0*[COSD((i-1)*dtheta+1.0_WP), -SIND((i-1)*dtheta+1.0_WP), 0.0_WP]
             ! lp%p(i)%vel=[0.0_WP, -1.0_WP, 0.0_WP]*10.0_WP**(-1.0_WP + i*3.0_WP/np)
-            print *, lp%p(i)%vel(2)
+            lp%p(i)%angVel=0.0_WP
             lp%p(i)%Acol=0.0_WP
             lp%p(i)%Tcol=0.0_WP
             lp%p(i)%dt=time%dt
@@ -220,9 +220,7 @@ contains
        call time%adjust_dt()
        call time%increment()
 
-       ! Collide particles
-       if (.not.lp%hard_sphere) call lp%collide(dt=time%dt)
-
+      !  if (.not.lp%hard_sphere) call lp%collide(dt=time%dt)
        ! Advance particles by dt
        call lp%advance(dt=time%dt)
 
@@ -237,7 +235,6 @@ contains
                pmesh%var(2,i)=lp%p(i)%d
                pmesh%vec(:,1,i)=lp%p(i)%vel
                pmesh%vec(:,2,i)=lp%p(i)%angVel
-               lp%p(i)%debug=0.0_WP
             end do
           end block update_pmesh
           call ens_out%write_data(time%t)
@@ -249,7 +246,9 @@ contains
        call mfile%write()
        call cflfile%write()
         
-       if (save_count.gt.500) call die("Done!")
+       if (save_count.gt.500) then 
+         call die("Done!")
+       end if
     end do
 
   end subroutine simulation_run
