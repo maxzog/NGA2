@@ -220,7 +220,6 @@ contains
        call time%adjust_dt()
        call time%increment()
 
-      !  if (.not.lp%hard_sphere) call lp%collide(dt=time%dt)
        ! Advance particles by dt
        call lp%advance(dt=time%dt)
 
