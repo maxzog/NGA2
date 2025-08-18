@@ -327,7 +327,7 @@ contains
       
       ! Prepare magnitude of SR tensor
       allocate(S_(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      S_=sqrt(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2))
+      S_=sqrt(2.0_WP*(SR(1,:,:,:)**2+SR(2,:,:,:)**2+SR(3,:,:,:)**2+2.0_WP*(SR(4,:,:,:)**2+SR(5,:,:,:)**2+SR(6,:,:,:)**2)))
       
       ! Compute the favre-filtered LM and MM tensors
       do k=this%cfg%kmin_,this%cfg%kmax_
@@ -368,7 +368,7 @@ contains
                FrhoUU(5)=sum(this%filterd(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*Vi(i-1:i+1,j-1:j+1,k-1:k+1)*Wi(i-1:i+1,j-1:j+1,k-1:k+1))
                FrhoUU(6)=sum(this%filterd(:,:,:,i,j,k)*rho(i-1:i+1,j-1:j+1,k-1:k+1)*Wi(i-1:i+1,j-1:j+1,k-1:k+1)*Ui(i-1:i+1,j-1:j+1,k-1:k+1))
                ! Compute Mij=<Frho*S_*SR>-ratio^2<Frho><FS_><FSR>
-               Mij=2.0_WP*this%delta(i,j,k)**2*(FrhoS_SR-this%ratio(i,j,k)**2*Frho*FS_*FSR)
+               Mij=FrhoS_SR-this%ratio(i,j,k)**2*Frho*FS_*FSR
                ! Compute Lij=<rho*U*U>-<rho><U><U>
                Lij(1)=FrhoUU(1)-Frho*FU*FU
                Lij(2)=FrhoUU(2)-Frho*FV*FV
