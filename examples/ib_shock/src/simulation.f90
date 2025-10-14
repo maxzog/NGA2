@@ -187,17 +187,17 @@ module simulation
            do i=cfg%imin_,cfg%imax_
               if (cfg%Gib(i,j,k).lt.0.0_WP) then
                  ! Force in x
-                 Fl=fs%dxi*(FQx(i  ,j,k,1)-FQx(i-1,j,k,1))+fs%dyi*(FQy(i  ,j+1,k,1)-FQy(i  ,j,k,1))+fs%dzi*(FQz(i  ,j,k+1,1)-FQz(i  ,j,k,1))*fs%vol
-                 Fr=fs%dxi*(FQx(i+1,j,k,1)-FQx(i  ,j,k,1))+fs%dyi*(FQy(i+1,j+1,k,1)-FQy(i+1,j,k,1))+fs%dzi*(FQz(i+1,j,k+1,1)-FQz(i+1,j,k,1))*fs%vol
-                 ibm_force(1)=ibm_force(1)+0.5_WP*(Fl+Fr)
+                 Fl=fs%dxi*(FQx(i  ,j,k,1)-FQx(i-1,j,k,1))+fs%dyi*(FQy(i  ,j+1,k,1)-FQy(i  ,j,k,1))+fs%dzi*(FQz(i  ,j,k+1,1)-FQz(i  ,j,k,1))
+                 Fr=fs%dxi*(FQx(i+1,j,k,1)-FQx(i  ,j,k,1))+fs%dyi*(FQy(i+1,j+1,k,1)-FQy(i+1,j,k,1))+fs%dzi*(FQz(i+1,j,k+1,1)-FQz(i+1,j,k,1))
+                 ibm_force(1)=ibm_force(1)+0.5_WP*(Fl+Fr)*fs%vol
                  ! Force in y
-                 Fl=fs%dxi*(FQx(i+1,j  ,k,2)-FQx(i,j  ,k,2))+fs%dyi*(FQy(i,j  ,k,2)-FQy(i,j-1,k,2))+fs%dzi*(FQz(i,j  ,k+1,2)-FQz(i,j  ,k,2))*fs%vol
-                 Fr=fs%dxi*(FQx(i+1,j+1,k,2)-FQx(i,j+1,k,2))+fs%dyi*(FQy(i,j+1,k,2)-FQy(i,j  ,k,2))+fs%dzi*(FQz(i,j+1,k+1,2)-FQz(i,j+1,k,2))*fs%vol
-                 ibm_force(2)=ibm_force(2)+0.5_WP*(Fl+Fr)
+                 Fl=fs%dxi*(FQx(i+1,j  ,k,2)-FQx(i,j  ,k,2))+fs%dyi*(FQy(i,j  ,k,2)-FQy(i,j-1,k,2))+fs%dzi*(FQz(i,j  ,k+1,2)-FQz(i,j  ,k,2))
+                 Fr=fs%dxi*(FQx(i+1,j+1,k,2)-FQx(i,j+1,k,2))+fs%dyi*(FQy(i,j+1,k,2)-FQy(i,j  ,k,2))+fs%dzi*(FQz(i,j+1,k+1,2)-FQz(i,j+1,k,2))
+                 ibm_force(2)=ibm_force(2)+0.5_WP*(Fl+Fr)*fs%vol
                  ! Force in z
-                 Fl=fs%dxi*(FQx(i+1,j,k  ,3)-FQx(i,j,k  ,3))+fs%dyi*(FQy(i,j+1,k  ,3)-FQy(i,j,k  ,3))+fs%dzi*(FQz(i,j,k  ,3)-FQz(i,j,k-1,3))*fs%vol
-                 FR=fs%dxi*(FQx(i+1,j,k+1,3)-FQx(i,j,k+1,3))+fs%dyi*(FQy(i,j+1,k+1,3)-FQy(i,j,k+1,3))+fs%dzi*(FQz(i,j,k+1,3)-FQz(i,j,k  ,3))*fs%vol
-                 ibm_force(3)=ibm_force(3)+0.5_WP*(Fl+Fr)
+                 Fl=fs%dxi*(FQx(i+1,j,k  ,3)-FQx(i,j,k  ,3))+fs%dyi*(FQy(i,j+1,k  ,3)-FQy(i,j,k  ,3))+fs%dzi*(FQz(i,j,k  ,3)-FQz(i,j,k-1,3))
+                 FR=fs%dxi*(FQx(i+1,j,k+1,3)-FQx(i,j,k+1,3))+fs%dyi*(FQy(i,j+1,k+1,3)-FQy(i,j,k+1,3))+fs%dzi*(FQz(i,j,k+1,3)-FQz(i,j,k  ,3))
+                 ibm_force(3)=ibm_force(3)+0.5_WP*(Fl+Fr)*fs%vol
               end if
            end do
         end do
@@ -398,9 +398,9 @@ module simulation
         u2=abs(u2-u1); M2=u2/sqrt(Gamma*p2/rho2); u1=0.0_WP; M1=u1/sqrt(Gamma*p1/rho1)
         ! Set heat capacities corresponding to a normalized pre-shock
         Cv=(p1+Pinf)/(rho1*(Gamma-1.0_WP))
-        ! Get reference temperature
-        T0=get_T(rho1,p1)
-        ! Viscous parameters
+        ! Get reference temperature based on post-shock conditions
+        T0=get_T(rho2,p2)
+        ! Define viscosity based on post-shock Reynolds number
         call param_read('Reynolds number',Re); visc0=rho2*2.0_WP*Rcyl*u2/Re
         ! Output case info
         if (cfg%amRoot) then
@@ -486,7 +486,7 @@ module simulation
          call ens_out%add_scalar('beta',beta)
          call ens_out%add_scalar('visc',visc)
          call ens_out%add_scalar('visc_t',visc_t)
-         call ens_out%add_scalar('div',div) 
+         call ens_out%add_scalar('div',div)
          call ens_out%add_scalar('Gib',cfg%Gib)
          call ens_out%add_scalar('IBM',gp%label)
          ! Output to ensight

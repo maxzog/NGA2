@@ -13,6 +13,8 @@ module mathtools
    public :: arctan
    public :: eigensolve3
    public :: quadrature_rule
+   public :: triproj
+   public :: spherical_harmonic
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -95,32 +97,9 @@ contains
       ! Deallocate the work arrays
       deallocate(A,B)
    end subroutine fd_itp_build
-   
-   
-!!$   function inverse_matrix(A) result(Ainv)
-!!$      use messager, only: die
-!!$      implicit none
-!!$      real(WP), dimension(:,:), intent(in) :: A
-!!$      real(WP), dimension(size(A,1),size(A,2)) :: Ainv
-!!$      real(WP), dimension(size(A,1)) :: work
-!!$      integer , dimension(size(A,1)) :: ipiv
-!!$      integer :: n,info
-!!$      external DGETRF
-!!$      external DGETRI
-!!$      ! Copy A over to Ainv to prevent it from being overwritten by LAPACK
-!!$      Ainv=A
-!!$      ! Store size
-!!$      n=size(A,1)
-!!$      ! Compute LU factorization of matrix A using partial pivoting with row interchanges
-!!$      call DGETRF(n,n,Ainv,n,ipiv,info)
-!!$      ! Error handling
-!!$      if (info.ne.0) call die('[inverse_matrix] Matrix is numerically singular')
-!!$      ! Compute inverse of matrix using LU factorization computed above
-!!$      call DGETRI(n,Ainv,n,ipiv,work,n,info)
-!!$      if (info.ne.0) call die('[inverse_matrix] Matrix inversion failed')
-!!$    end function inverse_matrix
 
-
+   
+   !> Computes the inverse of a square matrix A
    function inverse_matrix(A) result(Ainv)
      use messager,only:die
      implicit none
@@ -168,9 +147,9 @@ contains
      end do
      Ainv=transpose(Ainv)
    end function inverse_matrix
-
-
-    ! Returns normalized vector: w=v/|v|
+   
+   
+   ! Returns normalized vector: w=v/|v|
    pure function normalize(v) result(w)
       implicit none
       real(WP), dimension(3), intent(in) :: v
@@ -388,6 +367,234 @@ contains
       ! Rescale to be in [0,1]
       x=0.5_WP*(1.0_WP+x); w=0.5_WP*w
    end subroutine quadrature_rule
+
+
+    ! 3D projection of a vertex onto a triangle
+    subroutine triproj(myp,myt1,myt2,myt3,proj)
+    implicit none
+    real(WP), dimension(3), intent(in)  :: myp,myt1,myt2,myt3
+    real(WP), dimension(3), intent(out) :: proj
+    real(WP), dimension(3) :: v1,v2,vp
+    real(WP) :: a,b,c,d,e,f
+    real(WP) :: det,s,t,inv
+    real(WP) :: denom,numer,tmp0,tmp1
+    ! To do: check for colinearity and/or too small triangles
+    
+    ! Build triangle information
+    v1=myt2-myt1
+    v2=myt3-myt1
+    vp=myt1-myp
+    a=dot_product(v1,v1)
+    b=dot_product(v1,v2)
+    c=dot_product(v2,v2)
+    d=dot_product(v1,vp)
+    e=dot_product(v2,vp)
+    f=dot_product(vp,vp)
+    det=a*c-b*b
+    s  =b*e-c*d
+    t  =b*d-a*e
+    
+    ! Check if projection lies inside the triangle
+    if (s+t.le.det) then
+       if (s.lt.0.0_WP) then
+          if (t.lt.0.0_WP) then
+             if (d.lt.0.0_WP) then
+                t=0.0_WP
+                if (-d.ge.a) then
+                   s=1.0_WP
+                else
+                   s=-d/a
+                end if
+             else
+                s=0.0_WP
+                if (e.ge.0.0_WP) then
+                   t=0.0_WP
+                else
+                   if (-e.ge.c) then
+                      t=1.0_WP
+                   else
+                      t=-e/c
+                   end if
+                end if
+             end if
+          else
+             s=0.0_WP
+             if (e.ge.0.0_WP) then
+                t=0.0_WP
+             else
+                if (-e.ge.c) then
+                   t=1.0_WP
+                else
+                   t=-e/c
+                end if
+             end if
+          end if
+       else
+          if (t.lt.0.0_WP) then
+             t=0.0_WP
+             if (d.ge.0.0_WP) then
+                s=0.0_WP
+             else
+                if (-d.ge.a) then
+                   s=1.0_WP
+                else
+                   s=-d/a
+                end if
+             end if
+          else
+             inv=1.0_WP/det
+             s=s*inv
+             t=t*inv
+          end if
+       end if
+    else
+       if (s.lt.0.0_WP) then
+          tmp0=b+d
+          tmp1=c+e
+          if (tmp1.gt.tmp0) then
+             numer=tmp1-tmp0
+             denom=a-2.0_WP*b+c
+             if (numer.ge.denom) then
+                s=1.0_WP
+                t=0.0_WP
+             else
+                s=numer/denom
+                t=1.0_WP-s
+             end if
+          else
+             s=0.0_WP
+             if (tmp1.le.0.0_WP) then
+                t=1.0_WP
+             else
+                if (e.ge.0.0_WP) then
+                   t=0.0_WP
+                else
+                   t=-e/c
+                end if
+             end if
+          end if
+       else
+          if (t.lt.0.0_WP) then
+             tmp0=b+e
+             tmp1=a+d
+             if (tmp1.gt.tmp0) then
+                numer=tmp1-tmp0
+                denom=a-2.0_WP*b+c
+                if (numer.ge.denom) then
+                   t=1.0_WP
+                   s=0.0_WP
+                else
+                   t=numer/denom
+                   s=1.0_WP-t
+                end if
+             else
+                t=0.0_WP
+                if (tmp1.le.0.0_WP) then
+                   s=1.0_WP
+                else
+                   if (d.ge.0.0_WP) then
+                      s=0.0_WP
+                   else
+                      s=-d/a
+                   end if
+                end if
+             end if
+          else
+             numer=c+e-b-d
+             if (numer.le.0.0_WP) then
+                s=0.0_WP
+                t=1.0_WP
+             else
+                denom=a-2.0_WP*b+c
+                if (numer.ge.denom) then
+                   s=1.0_WP
+                   t=0.0_WP
+                else
+                   s=numer/denom
+                   t=1.0_WP-s
+                end if
+             end if
+          end if
+       end if
+    end if
+    
+    ! Get projection
+    proj=myt1+s*v1+t*v2
+    
+    return
+  end subroutine triproj
+  
+   
+   !> Computes spherical harmonics Y_l^m(theta,phi) for a given l and m at angles theta and phi
+   function spherical_harmonic(l,m,theta,phi) result(Ylm)
+      implicit none
+      integer , intent(in) :: l,m
+      real(WP), intent(in) :: theta,phi
+      real(WP) :: Ylm
+      real(WP) :: norm,plm
+      integer  :: mm,abs_m
+      ! Associated Legendre polynomial
+      abs_m=abs(m); plm=legendre_p(l,abs_m,cos(theta))
+      ! Normalization factor
+      norm=sqrt((2.0_WP*l+1.0_WP)/(4.0_WP*Pi)*real(factorial(l-abs_m),WP)/real(factorial(l+abs_m),WP))
+      ! Real-valued spherical harmonics
+      if (m.gt.0) then
+         Ylm=sqrt(2.0_WP)*norm*plm*cos(m*phi)
+      else if (m.lt.0) then
+         Ylm=sqrt(2.0_WP)*norm*plm*sin(abs(m)*phi)
+      else
+         Ylm=norm*plm
+      end if
+   contains
+      !> Computes factorial of n
+      function factorial(n) result(fact)
+         integer, intent(in) :: n
+         integer :: fact,j
+         fact=1
+         if (n.gt.0) then
+            do j=2,n
+               fact=fact*j
+            end do
+         end if
+      end function factorial
+      !> Computes the associated Legendre polynomial P_l0^m0(x)
+      function legendre_p(l0,m0,x) result(p)
+         implicit none
+         integer , intent(in) :: l0,m0
+         real(WP), intent(in) :: x
+         real(WP) :: p
+         integer  :: i
+         real(WP) :: pmm,pmmp1,pll,somx2
+         if (m0.lt.0.or.m0.gt.l0.or.abs(x).gt.1.0_WP) then
+            p=0.0_WP
+            return
+         end if
+         pmm=1.0_WP
+         if (m0.gt.0) then
+            somx2=sqrt((1.0_WP-x)*(1.0_WP+x))
+            do i=1,m0
+               pmm=-pmm*(2*i-1)*somx2
+            end do
+         end if
+         if (l0.eq.m0) then
+            p=pmm
+            return
+         else
+            pmmp1=x*(2*m0+1)*pmm
+            if (l0.eq.m0+1) then
+               p=pmmp1
+               return
+            else
+               do i=m0+2,l0
+                  pll=((2*i-1)*x*pmmp1-(i+m0-1)*pmm)/(i-m0)
+                  pmm=pmmp1
+                  pmmp1=pll
+               end do
+               p=pmmp1
+            end if
+         end if
+      end function legendre_p
+   end function spherical_harmonic
    
    
 end module mathtools
